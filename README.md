@@ -19,9 +19,12 @@ Open in a browser. Drag to orbit, scroll to zoom, right-drag/two-finger to
 pan, tap a parcel to survey it, claim it with gems (simulated wallet).
 
 **Creator mode** (the ⚒ BUILD button, or `B`): pick a cube from the tileset
-and click to place it; right-click (or the eraser tile) removes; `ctrl+Z`
-undoes; *revert all* restores the authored district. Edits persist in the
-browser and are replayed on top of genesis at load. Crucially, **every edit
+and click — or hold and **drag to paint**. Brush sizes 1/2/3 place single
+cubes or sculpting blobs; the **box** tool fills between two clicked
+corners; right-click erases one cube; alt-click samples the material under
+the cursor; alt-drag orbits while painting; `ctrl+Z` undoes a whole stroke;
+*revert all* restores the authored district. Edits persist in the browser
+and are replayed on top of genesis at load. Crucially, **every edit
 re-surveys the district live** — dig a channel from the sea to an inland
 plot and its deed reprices as Waterfront; bury ore in a column and the deed
 gains mineral rights. The land market reads the cubes, always.
@@ -92,14 +95,18 @@ test/run.js  headless suite
 vendor/      three.min.js r128 (vendored — works offline)
 ```
 
-The world is 256×256×80 (5.2MB raw, ~1.1MB serialized). Plots are 8×8
-columns → a 32×32 survey grid, ~250 buildable deeds, 5 at LANDMARK tier.
+The world is 384×384×128 (18MB raw, ~2.4MB serialized) — landscape scale:
+a cube is small against the land, trees are three cubes of crown, the Prow
+rises ~74 cubes over the sea and Lantern Falls drops ~26. Plots are 12×12
+columns → a 32×32 survey grid, ~250 buildable deeds, LANDMARK tier scarce.
+The full mesh builds in under a second (greedy mesher with height-clamped
+sweeps); edits remesh only their 32×32 chunk, batched once per frame.
 
 ## Next
 
-- Sculpt-mode ergonomics: drag-to-paint, brush sizes, box fill, eyedropper
 - Player-scoped building: gate edits to plots whose deed you hold (creator
   mode already carries the machinery — it just skips the ownership check)
 - Ship the world as a baked `.sgw` data file (sculpt → export) instead of
   rebuilding genesis + edits at load
+- Copy/paste stamps and mirrored symmetry for faster authoring
 - District 02, when 01 sells out

@@ -102,7 +102,7 @@ const d1 = SG.buildDistrict01();
 const buildMs = Date.now() - t0;
 const { world, landmarks } = d1;
 {
-  ok(world.sx === 256 && world.sy === 80 && world.sz === 256, 'district dimensions');
+  ok(world.sx === 384 && world.sy === 128 && world.sz === 384, 'district dimensions');
   console.log(`  · built in ${buildMs}ms, checksum ${world.checksum().toString(16)}`);
   const d2 = SG.buildDistrict01();
   ok(d2.world.checksum() === world.checksum(), 'genesis is fully deterministic (same checksum twice)');
@@ -111,55 +111,70 @@ const { world, landmarks } = d1;
   const lm = Object.fromEntries(landmarks.map(l => [l.key, l]));
 
   // the Ewer holds water above sea level
-  ok(world.get(lm.lake.x, 49, lm.lake.z) === MAT.WATER, 'the Ewer holds water above sea level');
+  let lakeWater = 0;
+  for (let y = SEA + 5; y < world.sy; y++) if (world.get(lm.lake.x, y, lm.lake.z) === MAT.WATER) lakeWater++;
+  ok(lakeWater >= 4, `the Ewer holds water high above sea level (${lakeWater} deep)`);
 
-  // Lantern Falls is a real vertical water sheet: ≥8 consecutive water cubes
+  // Lantern Falls is a real vertical water sheet at landscape scale
   let sheet = 0, best = 0;
-  for (let y = 10; y < 60; y++) {
+  for (let y = 10; y < 90; y++) {
     if (world.get(lm.falls.x, y, lm.falls.z) === MAT.WATER) { sheet++; best = Math.max(best, sheet); }
     else sheet = 0;
   }
-  ok(best >= 8, `Lantern Falls is a real vertical sheet (${best} stacked water cubes)`);
+  ok(best >= 16, `Lantern Falls is a tall vertical sheet (${best} stacked water cubes)`);
 
   // Glimmer Hollow is a real tunnel: air cells under solid roof near the mouth
+  // (the chamber sits NW of and below the mouth; lm.cave.y is mouth + 6)
   let roofedAir = 0;
-  for (let dz = -12; dz <= 4; dz++) for (let dy = -8; dy <= 4; dy++) for (let dx = -10; dx <= 4; dx++) {
-    const x = lm.cave.x + dx, y = lm.cave.y - 5 + dy, z = lm.cave.z + dz;
+  for (let dz = -26; dz <= 5; dz++) for (let dy = -16; dy <= 4; dy++) for (let dx = -22; dx <= 5; dx++) {
+    const x = lm.cave.x + dx, y = lm.cave.y - 6 + dy, z = lm.cave.z + dz;
     if (world.get(x, y, z) === MAT.AIR && SG.isOpaque(world.get(x, y + 3, z))) roofedAir++;
   }
-  ok(roofedAir > 60, `Glimmer Hollow is a real cave (${roofedAir} roofed air cells)`);
-  let crystals = 0;
-  for (let z = 85; z < 105; z++) for (let y = 10; y < 45; y++) for (let x = 85; x < 105; x++)
-    if (world.get(x, y, z) === MAT.CRYSTAL) crystals++;
-  ok(crystals > 20, `the geode chamber is studded with crystal (${crystals} cubes)`);
+  ok(roofedAir > 300, `Glimmer Hollow is a real cavern (${roofedAir} roofed air cells)`);
+  let crystals = 0, cavePool = 0;
+  for (let z = 125; z < 160; z++) for (let y = 10; y < 70; y++) for (let x = 125; x < 160; x++) {
+    const id = world.get(x, y, z);
+    if (id === MAT.CRYSTAL) crystals++;
+    if (id === MAT.WATER && world.surfaceAt(x, z) > y) cavePool++; // water beneath the ground surface — the cave pool
+  }
+  ok(crystals > 40, `the geode chamber is studded with crystal (${crystals} cubes)`);
+  ok(cavePool >= 10, `a still pool lies on the geode floor (${cavePool} roofed water cubes)`);
 
   // the Needle's Eye is a real arch: stone above air above water at its center
   const ax = lm.arch.x, az = lm.arch.z;
   let hasStoneOver = false, hasAirUnder = false, hasWaterBelow = false;
-  for (let y = SEA + 4; y < SEA + 14; y++) if (SG.isOpaque(world.get(ax, y, az))) hasStoneOver = true;
-  for (let y = SEA + 1; y < SEA + 5; y++) if (world.get(ax, y, az) === MAT.AIR) hasAirUnder = true;
-  for (let y = SEA - 3; y < SEA; y++) if (world.get(ax, y, az) === MAT.WATER) hasWaterBelow = true;
+  for (let y = SEA + 6; y < SEA + 18; y++) if (SG.isOpaque(world.get(ax, y, az))) hasStoneOver = true;
+  for (let y = SEA + 1; y < SEA + 6; y++) if (world.get(ax, y, az) === MAT.AIR) hasAirUnder = true;
+  for (let y = SEA - 4; y < SEA; y++) if (world.get(ax, y, az) === MAT.WATER) hasWaterBelow = true;
   ok(hasStoneOver && hasAirUnder, "the Needle's Eye spans open air (stone over air)");
   ok(hasWaterBelow, 'water passes beneath the arch');
 
-  // hot springs hold SPRING fluid
+  // hot springs hold SPRING fluid around their landmark
   let springCubes = 0;
-  for (let z = 118; z < 132; z++) for (let y = 28; y < 36; y++) for (let x = 104; x < 120; x++)
-    if (world.get(x, y, z) === MAT.SPRING) springCubes++;
-  ok(springCubes >= 6, `the Kettles hold mineral water (${springCubes} spring cubes)`);
+  for (let z = lm.springs.z - 12; z < lm.springs.z + 12; z++)
+    for (let y = 40; y < 56; y++)
+      for (let x = lm.springs.x - 12; x < lm.springs.x + 12; x++)
+        if (world.get(x, y, z) === MAT.SPRING) springCubes++;
+  ok(springCubes >= 10, `the Kettles hold mineral water (${springCubes} spring cubes)`);
 
   // ore exists in sensible amounts
-  const counts = world.countInBox(0, 0, 255, 255);
-  ok(counts[MAT.COPPER_ORE] > 100, `copper veins seeded (${counts[MAT.COPPER_ORE]})`);
-  ok(counts[MAT.IRON_ORE] > 60, `iron veins seeded (${counts[MAT.IRON_ORE]})`);
-  ok(counts[MAT.GOLD_ORE] > 20, `gold veins seeded (${counts[MAT.GOLD_ORE]})`);
-  ok(counts[MAT.WOOD] > 400, `forests planted (${counts[MAT.WOOD]} trunk cubes)`);
-  ok(counts[MAT.BASALT] > 500, `the Organ Pipes are basalt (${counts[MAT.BASALT]})`);
-  ok(counts[MAT.SNOW] > 50, `the Prow is snow-capped (${counts[MAT.SNOW]})`);
+  const counts = world.countInBox(0, 0, world.sx - 1, world.sz - 1);
+  ok(counts[MAT.COPPER_ORE] > 250, `copper veins seeded (${counts[MAT.COPPER_ORE]})`);
+  ok(counts[MAT.IRON_ORE] > 150, `iron veins seeded (${counts[MAT.IRON_ORE]})`);
+  ok(counts[MAT.GOLD_ORE] > 40, `gold veins seeded (${counts[MAT.GOLD_ORE]})`);
+  ok(counts[MAT.WOOD] > 1500, `forests of small trees planted (${counts[MAT.WOOD]} trunk cubes)`);
+  ok(counts[MAT.CLAY] > 1000, `strata bands seam the cliff faces (${counts[MAT.CLAY]} clay cubes)`);
+  ok(counts[MAT.BASALT] > 2000, `the Organ Pipes are basalt (${counts[MAT.BASALT]})`);
+  ok(counts[MAT.SNOW] > 300, `the Prow is snow-capped (${counts[MAT.SNOW]})`);
+
+  // trees are small against the land: no canopy wider than 5 cubes exists,
+  // and plots (12×12) can hold several trees
+  ok(counts[MAT.LEAF_PINE] + counts[MAT.LEAF_BROAD] < counts[MAT.WOOD] * 12,
+    'canopies are compact relative to trunks');
 
   const ser = world.serialize();
   ok(World.deserialize(ser).checksum() === world.checksum(),
-    `district serializes losslessly (${(ser.length / 1024).toFixed(0)}KB vs ${(world.data.length / 1048576).toFixed(1)}MB raw)`);
+    `district serializes losslessly (${(ser.length / 1048576).toFixed(1)}MB vs ${(world.data.length / 1048576).toFixed(1)}MB raw)`);
 }
 
 /* ---------------- survey ---------------- */
@@ -213,19 +228,19 @@ section('editing');
   ok(erased === before, 'erasing it restores the exact face count');
 
   // the survey reads edits live: buried ore and dug water reprice the deed
-  const flat = new World(32, 32, 32);
-  flat.fill(0, 0, 0, 31, 0, 31, MAT.BEDROCK);
-  flat.fill(0, 1, 0, 31, SEA, 31, MAT.STONE);
-  flat.fill(0, SEA + 1, 0, 31, SEA + 1, 31, MAT.GRASS);
+  const flat = new World(48, 40, 48);
+  flat.fill(0, 0, 0, 47, 0, 47, MAT.BEDROCK);
+  flat.fill(0, 1, 0, 47, SEA, 47, MAT.STONE);
+  flat.fill(0, SEA + 1, 0, 47, SEA + 1, 47, MAT.GRASS);
   const s1 = SG.surveyDistrict(flat, []);
   ok(s1.plots.every(p => p.buildable && p.mineralValue === 0 && !p.riverside),
     'flat control world: all buildable, no minerals, no riverside');
   flat.set(4, 10, 4, MAT.GOLD_ORE);           // bury gold inside plot (0,0)
-  flat.set(20, SEA + 2, 20, MAT.WATER);       // pooled water above sea near plot (2,2)
+  flat.set(30, SEA + 2, 30, MAT.WATER);       // pooled water above sea near plot (2,2)
   const s2 = SG.surveyDistrict(flat, []);
   ok(s2.plots[0].minerals.gold === 1 && s2.plots[0].mineralValue === 6,
     'buried gold appears in the deed\'s mineral rights');
-  ok(s2.plots[2 * 4 + 2].riverside === true,
+  ok(s2.plots[2 * s2.grid + 2].riverside === true,
     'dug water above sea level flips the plot to riverside');
   ok(s2.plots[0].score > s1.plots[0].score, 'the deed repriced upward');
 }

@@ -9,35 +9,57 @@ const $ = id => document.getElementById(id);
 let world, landmarks, survey, plots;
 let wallet = 2500, claims = new Set(), selectedIdx = -1;
 const beacons = new Map();
-const SAVE_KEY = 'socialgen-district01-v1';
-const EDITS_KEY = 'socialgen-district01-edits-v1';
+const SAVE_KEY = 'socialgen-district01-v2';
+const EDITS_KEY = 'socialgen-district01-edits-v2';
 
 /* ---------- creator mode: sculpt the district cube by cube ---------- */
 let buildMode = false, selectedMat = -1; // set to GRASS once palette loads
+let brushSize = 1;                       // 1 = single cube, 2/3 = blob brushes
+let tool = 'brush';                      // 'brush' | 'box'
+let boxCorner = null;                    // first corner of a pending box fill
 const ERASER = -1;
 const edits = new Map();   // "x,y,z" -> id placed (diff vs genesis, replayed on load)
-const undoStack = [];
+const undoStack = [];      // batches: one entry per click / stroke / box fill
+let currentBatch = null;
 
+function beginBatch() { currentBatch = []; }
+function endBatch() {
+  if (currentBatch && currentBatch.length) {
+    undoStack.push(currentBatch);
+    if (undoStack.length > 200) undoStack.shift();
+  }
+  currentBatch = null;
+}
 function applyEdit(x, y, z, id, opts = {}) {
   if (!world || !world.inBounds(x, y, z)) return false;
   if (y === 0) return false; // bedrock is forever
   const prev = world.get(x, y, z);
-  if (prev === id) return false;
+  if (prev === id || prev === SG.MAT.BEDROCK) return false;
   world.set(x, y, z, id);
   edits.set(x + ',' + y + ',' + z, id);
   if (!opts.silent) {
-    undoStack.push({ x, y, z, prev });
-    if (undoStack.length > 500) undoStack.shift();
+    if (currentBatch) currentBatch.push({ x, y, z, prev });
+    else undoStack.push([{ x, y, z, prev }]);
   }
-  SG.render.rebuildAround(world, x, z);
+  SG.render.markDirty(world, x, z); // remeshed once per frame by flushDirty
   scheduleResurvey();
   schedulePersistEdits();
   return true;
 }
+// blob brush centred on a cell: size 1 acts on the single cell, 2/3 carve or
+// mound a rough sphere, overwriting anything but bedrock — sculpting, not lego
+function applyBrush(cx, cy, cz, id) {
+  if (brushSize === 1) { applyEdit(cx, cy, cz, id); return; }
+  const r = brushSize === 2 ? 1.4 : 2.3;
+  const R2 = Math.ceil(r);
+  for (let dz = -R2; dz <= R2; dz++) for (let dy = -R2; dy <= R2; dy++) for (let dx = -R2; dx <= R2; dx++)
+    if (Math.hypot(dx, dy, dz) <= r) applyEdit(cx + dx, cy + dy, cz + dz, id);
+}
 function undoEdit() {
-  const e = undoStack.pop();
-  if (!e) { toast('Nothing to undo'); return; }
-  applyEdit(e.x, e.y, e.z, e.prev, { silent: true });
+  const batch = undoStack.pop();
+  if (!batch) { toast('Nothing to undo'); return; }
+  for (let i = batch.length - 1; i >= 0; i--)
+    applyEdit(batch[i].x, batch[i].y, batch[i].z, batch[i].prev, { silent: true });
 }
 
 // the district is re-surveyed after every edit: dig a canal to your plot and
@@ -68,8 +90,8 @@ function loadEdits() {
 }
 
 /* ---------- camera rig (orbit / pan / zoom, touch-friendly) ---------- */
-const target = new THREE.Vector3(0, 26, 0);
-let theta = -0.7, phi = 1.02, radius = 300, interacted = false;
+const target = new THREE.Vector3(0, 32, 0);
+let theta = -0.7, phi = 1.02, radius = 430, interacted = false;
 function updateCamera() {
   R.camera.position.set(
     target.x + radius * Math.sin(phi) * Math.sin(theta),
@@ -86,7 +108,7 @@ function pan(dx, dy) {
   const k = radius * 0.0016;
   target.addScaledVector(r, dx * k).addScaledVector(f, dy * k);
   const d = Math.hypot(target.x, target.z);
-  if (d > 150) { target.x *= 150 / d; target.z *= 150 / d; }
+  if (d > 225) { target.x *= 225 / d; target.z *= 225 / d; }
 }
 function onDown(e) {
   interacted = true;
@@ -108,11 +130,13 @@ function onMove(e) {
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, button: prev.button });
   if (pointers.size === 1) {
     if (prev.button === 2) pan(-dx, dy);
+    else if (buildMode && prev.button === 0 && tool === 'brush' && !e.altKey && !R.IS_TOUCH)
+      paintAt(e.clientX, e.clientY); // drag-to-paint; hold alt to orbit instead
     else { theta -= dx * 0.0052; phi = THREE.MathUtils.clamp(phi - dy * 0.0042, 0.22, 1.45); }
   } else if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
     const nd = Math.hypot(a.x - b.x, a.y - b.y);
-    if (pinchDist > 0) radius = THREE.MathUtils.clamp(radius * pinchDist / nd, 36, 540);
+    if (pinchDist > 0) radius = THREE.MathUtils.clamp(radius * pinchDist / nd, 54, 810);
     pinchDist = nd;
     pan(-dx * 0.7, dy * 0.7);
   }
@@ -120,10 +144,13 @@ function onMove(e) {
 function onUp(e) {
   const wasSingle = pointers.size === 1;
   pointers.delete(e.pointerId);
+  endBatch(); // closes a paint stroke; harmless otherwise
+  lastPaintKey = null;
   if (wasSingle && downPos) {
     const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
     if (moved < 7 && Date.now() - downTime < 600) {
-      if (buildMode && (e.button === 0 || e.button === 2)) buildClick(e.clientX, e.clientY, e.button);
+      if (buildMode && e.altKey && e.button === 0) eyedrop(e.clientX, e.clientY);
+      else if (buildMode && (e.button === 0 || e.button === 2)) buildClick(e.clientX, e.clientY, e.button);
       else if (e.button === 0) pickPlot(e.clientX, e.clientY);
     }
   }
@@ -136,7 +163,7 @@ function ddaFromScreen(px, py, skipFluid = false) {
   raycaster.setFromCamera(new THREE.Vector2((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1), R.camera);
   const o = raycaster.ray.origin, d = raycaster.ray.direction;
   return SG.raycast(world, o.x + world.sx / 2, o.y, o.z + world.sz / 2,
-    d.x, d.y, d.z, 1200, skipFluid);
+    d.x, d.y, d.z, 1800, skipFluid);
 }
 function plotFromScreen(px, py) {
   const hit = ddaFromScreen(px, py);
@@ -146,12 +173,14 @@ function plotFromScreen(px, py) {
   return cz * survey.grid + cx;
 }
 // where would the current tool act, given a screen point?
+// size-1 place targets the empty cell in front of the hit face (lego-precise);
+// bigger brushes centre on the hit cube itself (sculpting into the surface)
 function buildTarget(px, py) {
   const erase = selectedMat === ERASER;
   const skipFluid = !erase && !SG.PALETTE[selectedMat].fluid;
   const hit = ddaFromScreen(px, py, skipFluid);
   if (!hit) return null;
-  if (erase) return { x: hit.x, y: hit.y, z: hit.z, erase: true, id: hit.id };
+  if (erase || brushSize > 1) return { x: hit.x, y: hit.y, z: hit.z, erase, id: hit.id };
   return { x: hit.prev.x, y: hit.prev.y, z: hit.prev.z, erase: false };
 }
 function updateHover() {
@@ -161,34 +190,62 @@ function updateHover() {
   if (buildMode) {
     R.hoverMesh.visible = false;
     const t = buildTarget(px, py);
-    if (t && world.inBounds(t.x, t.y, t.z) && t.y > 0) R.ghostTo(world, t.x, t.y, t.z, t.erase);
-    else R.ghost.visible = false;
+    if (!t || !world.inBounds(t.x, t.y, t.z) || t.y <= 0) { R.ghost.visible = false; return; }
+    if (tool === 'box' && boxCorner) R.ghostBoxTo(world, boxCorner, t, selectedMat === ERASER);
+    else R.ghostTo(world, t.x, t.y, t.z, t.erase, tool === 'box' ? 1 : brushSize);
     return;
   }
   R.ghost.visible = false;
-  if (radius > 320) { R.hoverMesh.visible = false; return; }
+  if (radius > 480) { R.hoverMesh.visible = false; return; }
   const idx = plotFromScreen(px, py);
   if (idx < 0 || idx === selectedIdx) { R.hoverMesh.visible = false; return; }
   const p = plots[idx];
   R.drapeTo(R.hoverMesh, world, p,
     claims.has(idx) ? 0x8fae63 : p.buildable ? 0xd9a441 : 0xc4685a);
 }
+
+let lastPaintKey = null;
+function paintAt(px, py) {
+  const t = buildTarget(px, py);
+  if (!t || t.y <= 0) return;
+  const key = t.x + ',' + t.y + ',' + t.z;
+  if (key === lastPaintKey) return;
+  lastPaintKey = key;
+  if (!currentBatch) beginBatch();
+  applyBrush(t.x, t.y, t.z, t.erase ? SG.MAT.AIR : selectedMat);
+}
+function eyedrop(px, py) {
+  const hit = ddaFromScreen(px, py);
+  if (!hit) return;
+  const el = document.querySelector(`#tiles .tile[data-mat="${hit.id}"]`);
+  if (el) { el.click(); toast('Sampled ' + SG.PALETTE[hit.id].name); }
+}
 function buildClick(px, py, button) {
-  if (button === 2) { // right-click always erases, whatever tile is selected
+  if (button === 2) { // right-click always erases one cube, whatever is selected
     const hit = ddaFromScreen(px, py);
-    if (!hit) return;
-    if (hit.id === SG.MAT.BEDROCK) { toast('Bedrock is forever'); return; }
-    applyEdit(hit.x, hit.y, hit.z, SG.MAT.AIR);
+    if (hit) applyEdit(hit.x, hit.y, hit.z, SG.MAT.AIR);
     return;
   }
   const t = buildTarget(px, py);
-  if (!t) return;
-  if (t.erase) {
-    if (t.id === SG.MAT.BEDROCK) { toast('Bedrock is forever'); return; }
-    applyEdit(t.x, t.y, t.z, SG.MAT.AIR);
-  } else {
-    applyEdit(t.x, t.y, t.z, selectedMat);
+  if (!t || t.y <= 0) return;
+  const mat = t.erase ? SG.MAT.AIR : selectedMat;
+  if (tool === 'box') {
+    if (!boxCorner) { boxCorner = { x: t.x, y: t.y, z: t.z }; toast('Box corner set — click the far corner'); return; }
+    const a = boxCorner, b = t;
+    boxCorner = null;
+    const vol = (Math.abs(b.x - a.x) + 1) * (Math.abs(b.y - a.y) + 1) * (Math.abs(b.z - a.z) + 1);
+    if (vol > 20000) { toast('Box too large (' + vol.toLocaleString() + ' cubes) — capped at 20,000'); return; }
+    beginBatch();
+    for (let z = Math.min(a.z, b.z); z <= Math.max(a.z, b.z); z++)
+      for (let y = Math.min(a.y, b.y); y <= Math.max(a.y, b.y); y++)
+        for (let x = Math.min(a.x, b.x); x <= Math.max(a.x, b.x); x++)
+          applyEdit(x, y, z, mat);
+    endBatch();
+    return;
   }
+  beginBatch();
+  applyBrush(t.x, t.y, t.z, mat);
+  endBatch();
 }
 function pickPlot(px, py) {
   const idx = plotFromScreen(px, py);
@@ -306,20 +363,31 @@ function buildTileset() {
     const e = SG.PALETTE[SG.MAT[key]];
     const b = document.createElement('button');
     b.className = 'tile';
-    b.title = e.name;
+    b.title = e.name + ' (alt-click terrain to sample)';
+    b.dataset.mat = e.id;
     b.style.background = `linear-gradient(160deg, ${css(e.colorTop)} 0 42%, ${css(e.color)} 42% 100%)`;
     if (e.fluid) b.style.opacity = 0.82;
     b.onclick = () => pick(e.id, b);
     wrap.appendChild(b);
     if (key === 'GRASS') pick(e.id, b); // sensible default tool
   }
+  // brush sizes & tool switches
+  const sel = (group, el) => {
+    document.querySelectorAll(group).forEach(b => b.classList.remove('on'));
+    el.classList.add('on');
+  };
+  document.querySelectorAll('.sizeBtn').forEach(b =>
+    b.addEventListener('click', () => { brushSize = +b.dataset.size; sel('.sizeBtn', b); }));
+  document.querySelectorAll('.toolBtn').forEach(b =>
+    b.addEventListener('click', () => { tool = b.dataset.tool; boxCorner = null; sel('.toolBtn', b); }));
 }
 
 const HINT_SURVEY = 'drag&nbsp;·&nbsp;orbit&emsp;scroll&nbsp;·&nbsp;zoom&emsp;right-drag / two-finger&nbsp;·&nbsp;pan<br>tap a parcel to survey it&nbsp;·&nbsp;the named places are held in trust';
-const HINT_BUILD = 'click&nbsp;·&nbsp;place cube&emsp;right-click&nbsp;·&nbsp;erase&emsp;ctrl+Z&nbsp;·&nbsp;undo<br>B&nbsp;·&nbsp;exit creator mode&emsp;edits re-survey the district live';
+const HINT_BUILD = 'drag&nbsp;·&nbsp;paint&emsp;alt-drag&nbsp;·&nbsp;orbit&emsp;right-click&nbsp;·&nbsp;erase&emsp;alt-click&nbsp;·&nbsp;sample&emsp;ctrl+Z&nbsp;·&nbsp;undo<br>B&nbsp;·&nbsp;exit creator mode&emsp;edits re-survey the district live';
 
 function setBuildMode(on) {
   buildMode = on;
+  boxCorner = null;
   $('buildBtn').classList.toggle('active', on);
   $('tileset').classList.toggle('hidden', !on);
   $('hints').innerHTML = on ? HINT_BUILD : HINT_SURVEY;
@@ -350,7 +418,8 @@ function persist() {
 function boot() {
   R.init();
   updateCamera();
-  setTimeout(() => {
+  const loadTxt = document.querySelector('#loader .t2');
+  setTimeout(async () => {
     const t0 = performance.now();
     const genesis = SG.buildDistrict01();
     world = genesis.world; landmarks = genesis.landmarks;
@@ -362,7 +431,8 @@ function boot() {
       }
     survey = SG.surveyDistrict(world, landmarks);
     plots = survey.plots;
-    R.buildWorld(world);
+    await R.buildWorld(world, f =>
+      loadTxt.textContent = `RAISING DISTRICT 01 — CUBE BY CUBE · ${Math.round(f * 100)}%`);
     R.addLandmarks(landmarks, world);
     R.makeDrapes();
     R.makeGhost();
@@ -384,7 +454,7 @@ function boot() {
   (function animate() {
     requestAnimationFrame(animate);
     if (!interacted) theta += 0.0006;
-    if (world) { updateHover(); R.tick(clock.getElapsedTime(), radius); }
+    if (world) { R.flushDirty(world); updateHover(); R.tick(clock.getElapsedTime(), radius); }
     updateCamera();
     R.renderer.render(R.scene, R.camera);
   })();
@@ -417,7 +487,7 @@ function boot() {
   document.body.addEventListener('pointercancel', onUp);
   addEventListener('wheel', e => {
     interacted = true;
-    radius = THREE.MathUtils.clamp(radius * (1 + e.deltaY * 0.0011), 36, 540);
+    radius = THREE.MathUtils.clamp(radius * (1 + e.deltaY * 0.0011), 54, 810);
   }, { passive: true });
 }
 

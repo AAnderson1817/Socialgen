@@ -17,7 +17,7 @@ const DEFS = [
   ['WATER',      0x3d7ea6, { fluid: true, jitter: 0 }],
   ['SPRING',     0x6fc9bd, { fluid: true, jitter: 0 }],                       // hot mineral water
   ['BEDROCK',    0x23231f, { jitter: 0 }],
-  ['STONE',      0x8b8477, { jitter: 0.05 }],
+  ['STONE',      0x95897a, { jitter: 0.05 }],
   ['BASALT',     0x4d4d57, { jitter: 0.06 }],                                 // columnar cliffs, sea stacks
   ['SOIL',       0x6f5136, { jitter: 0.06 }],
   ['GRASS',      0x6d8f44, { top: 0x84a552, jitter: 0.08 }],
@@ -53,11 +53,14 @@ DEFS.forEach(([key, color, opts], id) => {
   PALETTE[id] = e;
 });
 
-// occludes(id): does this cube hide the faces of solid neighbours?
+// flat lookup tables for the mesher's hot loops
 const opaque = new Uint8Array(PALETTE.length);
-PALETTE.forEach(e => { opaque[e.id] = e.solid ? 1 : 0; });
+const fluid = new Uint8Array(PALETTE.length);
+PALETTE.forEach(e => { opaque[e.id] = e.solid ? 1 : 0; fluid[e.id] = e.fluid ? 1 : 0; });
 
 SG.MAT = MAT;
 SG.PALETTE = PALETTE;
+SG.OPAQUE = opaque;
+SG.FLUID = fluid;
 SG.isOpaque = id => opaque[id] === 1;
 })();

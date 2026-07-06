@@ -9,8 +9,9 @@ const SG = (globalThis.SG ||= {});
 const { MAT, PALETTE, isOpaque } = SG;
 
 const AO_MUL = [0.52, 0.70, 0.85, 1.0];
-// axis 0=x, 1=y, 2=z; index [axis*2 + (sign>0?0:1)]
-const FACE_SHADE = [0.82, 0.78, 1.0, 0.50, 0.72, 0.66];
+// axis 0=x, 1=y, 2=z; index [axis*2 + (sign>0?0:1)] — sides kept bright enough
+// that tall cliff faces read warm, not murky
+const FACE_SHADE = [0.87, 0.81, 1.0, 0.50, 0.77, 0.70];
 
 function hash3(x, y, z) {
   let h = (x * 374761393) ^ (y * 668265263) ^ (z * 1274126177);
@@ -22,15 +23,24 @@ function hash3(x, y, z) {
 // Returns { opaque, fluid }, each { positions, normals, colors, indices }.
 function meshRegion(world, x0, z0, w, d) {
   const { sx, sy, sz, data } = world;
+  const OP = SG.OPAQUE, FL = SG.FLUID;
   const cell = (x, y, z) =>
     (x < 0 || x >= sx || y < 0 || y >= sy || z < 0 || z >= sz) ? 0 : data[(z * sx + x) * sy + y];
-  const solidAt = (x, y, z) => isOpaque(cell(x, y, z)) ? 1 : 0;
+  const solidAt = (x, y, z) => OP[cell(x, y, z)];
+
+  // nothing exists above the region's tallest column — clamp every sweep to it
+  let maxY = 0;
+  for (let z = z0; z < z0 + d; z++) for (let x = x0; x < x0 + w; x++) {
+    const h = world.heightAt(x, z);
+    if (h > maxY) maxY = h;
+  }
+  maxY = Math.min(sy, maxY + 2);
 
   const out = {
     opaque: { positions: [], normals: [], colors: [], indices: [] },
     fluid: { positions: [], normals: [], colors: [], indices: [] },
   };
-  const rmin = [x0, 0, z0], rmax = [x0 + w, sy, z0 + d];
+  const rmin = [x0, 0, z0], rmax = [x0 + w, maxY, z0 + d];
   const p = [0, 0, 0], q = [0, 0, 0];
 
   for (let axis = 0; axis < 3; axis++) {
@@ -47,17 +57,16 @@ function meshRegion(world, x0, z0, w, d) {
         for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
           p[axis] = a; p[u] = rmin[u] + i; p[v] = rmin[v] + j;
           const id = cell(p[0], p[1], p[2]);
-          if (id === MAT.AIR) continue;
+          if (id === 0) continue;
           q[0] = p[0]; q[1] = p[1]; q[2] = p[2]; q[axis] += sign;
           const nid = cell(q[0], q[1], q[2]);
-          const e = PALETTE[id];
           const m = j * nu + i;
-          if (e.fluid) {
-            if (nid !== MAT.AIR) continue;             // fluid faces only against air
+          if (FL[id]) {
+            if (nid !== 0) continue;                   // fluid faces only against air
             keys[m] = (1 << 24) | id;                  // AO-less, jitter-less
             fluidMask[m] = 1;
           } else {
-            if (isOpaque(nid)) continue;               // hidden face
+            if (OP[nid]) continue;                     // hidden face
             // corner AO from the 8 neighbours in the layer the face looks into
             let ao = 0;
             for (let c = 0; c < 4; c++) {
@@ -72,7 +81,7 @@ function meshRegion(world, x0, z0, w, d) {
               const av = (s1 && s2) ? 0 : 3 - (s1 + s2 + s3);
               ao |= av << (c * 2);
             }
-            const jl = e.jitter > 0 ? hash3(p[0], p[1], p[2]) % 3 : 1;
+            const jl = PALETTE[id].jitter > 0 ? hash3(p[0], p[1], p[2]) % 3 : 1;
             keys[m] = (1 << 24) | id | (ao << 8) | (jl << 16);
           }
         }

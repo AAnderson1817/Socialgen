@@ -25,7 +25,7 @@ R.init = function () {
   renderer.setSize(innerWidth, innerHeight);
   if (SHADOWS) { renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; }
   document.body.appendChild(renderer.domElement);
-  camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 2400);
+  camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 3400);
   hemi = new THREE.HemisphereLight(0xbfd6e4, 0x40503e, 0.8);
   scene.add(hemi);
   sun = new THREE.DirectionalLight(0xfff3dd, 1.05);
@@ -33,9 +33,9 @@ R.init = function () {
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     const sc = sun.shadow.camera;
-    sc.left = -170; sc.right = 170; sc.top = 170; sc.bottom = -170;
-    sc.near = 30; sc.far = 900;
-    sun.shadow.bias = -0.001;
+    sc.left = -260; sc.right = 260; sc.top = 260; sc.bottom = -260;
+    sc.near = 40; sc.far = 1400;
+    sun.shadow.bias = -0.0012;
   }
   scene.add(sun); scene.add(sun.target);
   addEventListener('resize', () => {
@@ -84,22 +84,29 @@ R.rebuildChunk = function (world, cx, cz) {
   chunkMeshes.set(key, entry);
 };
 
-// after editing cube (x,·,z): remesh its chunk, and any neighbour chunk whose
-// culling/AO could see the change (AO reaches one cube across the border)
-R.rebuildAround = function (world, x, z) {
-  const dirty = new Set();
+// mark the chunk holding (x,·,z) dirty — plus any neighbour chunk whose
+// culling/AO could see the change (AO reaches one cube across the border).
+// Dirty chunks are remeshed at most once per frame by flushDirty, so a brush
+// stroke of thirty cubes costs one rebuild, not thirty.
+const dirty = new Set();
+R.markDirty = function (world, x, z) {
   for (const dx of [-1, 0, 1]) for (const dz of [-1, 0, 1]) {
     const nx = x + dx, nz = z + dz;
     if (nx < 0 || nx >= world.sx || nz < 0 || nz >= world.sz) continue;
     dirty.add(Math.floor(nx / CHUNK) * CHUNK + ',' + Math.floor(nz / CHUNK) * CHUNK);
   }
+};
+R.flushDirty = function (world) {
+  if (!dirty.size) return;
   for (const k of dirty) {
     const [cx, cz] = k.split(',').map(Number);
     R.rebuildChunk(world, cx, cz);
   }
+  dirty.clear();
 };
+R.rebuildAround = function (world, x, z) { R.markDirty(world, x, z); R.flushDirty(world); };
 
-R.buildWorld = function (world) {
+R.buildWorld = async function (world, onProgress) {
   worldGroup = new THREE.Group();
   worldGroup.position.set(-world.sx / 2, 0, -world.sz / 2);
   scene.add(worldGroup);
@@ -110,8 +117,16 @@ R.buildWorld = function (world) {
     depthWrite: false, side: THREE.DoubleSide,
   });
   fluidMats.push(fluidMat);
+  const coords = [];
   for (let cz = 0; cz < world.sz; cz += CHUNK) for (let cx = 0; cx < world.sx; cx += CHUNK)
-    R.rebuildChunk(world, cx, cz);
+    coords.push([cx, cz]);
+  for (let i = 0; i < coords.length; i++) {
+    R.rebuildChunk(world, coords[i][0], coords[i][1]);
+    if (i % 10 === 9) {
+      onProgress?.((i + 1) / coords.length);
+      await new Promise(r => requestAnimationFrame(r)); // keep the loader breathing
+    }
+  }
 
   // the sea continues past the diorama edge, slightly below the meshed
   // water tops to avoid z-fighting at the seam
@@ -120,15 +135,15 @@ R.buildWorld = function (world) {
   const oceanMat = new THREE.MeshLambertMaterial({
     color: 0x3d7ea6, transparent: true, opacity: 0.88, depthWrite: true,
   });
-  const ocean = new THREE.Mesh(new THREE.CircleGeometry(1500, 48), oceanMat);
+  const ocean = new THREE.Mesh(new THREE.CircleGeometry(2200, 48), oceanMat);
   ocean.rotation.x = -Math.PI / 2;
   ocean.position.y = SG.SEA - 0.08;
   ocean.renderOrder = 1;
   scene.add(ocean);
-  const bed = new THREE.Mesh(new THREE.CircleGeometry(1500, 48),
+  const bed = new THREE.Mesh(new THREE.CircleGeometry(2200, 48),
     new THREE.MeshBasicMaterial({ color: 0x24404f }));
   bed.rotation.x = -Math.PI / 2;
-  bed.position.y = 6;
+  bed.position.y = 8;
   scene.add(bed);
 };
 
@@ -190,7 +205,7 @@ R.makeDrapes = function () {
   R.selectMesh = makeDrape(0.4);
 };
 
-/* ---- build-mode ghost cube ---- */
+/* ---- build-mode ghost: a cube scaled to the brush, or a stretched box ---- */
 R.makeGhost = function () {
   const box = new THREE.BoxGeometry(1.04, 1.04, 1.04);
   const fill = new THREE.Mesh(box, new THREE.MeshBasicMaterial({
@@ -204,10 +219,23 @@ R.makeGhost = function () {
   fill.renderOrder = 4;
   scene.add(g);
   R.ghost = g;
-  R.ghostTo = (world, x, y, z, erase) => {
-    g.position.set(x + 0.5 - world.sx / 2, y + 0.5, z + 0.5 - world.sz / 2);
+  const tint = erase => {
     const c = erase ? 0xc4685a : 0xd9a441;
     fill.material.color.setHex(c); edges.material.color.setHex(c);
+  };
+  R.ghostTo = (world, x, y, z, erase, size = 1) => {
+    g.position.set(x + 0.5 - world.sx / 2, y + 0.5, z + 0.5 - world.sz / 2);
+    const s = size === 1 ? 1 : size === 2 ? 3 : 5; // brush blob diameter
+    g.scale.set(s, s, s);
+    tint(erase);
+    g.visible = true;
+  };
+  // stretched between two corners for the box tool
+  R.ghostBoxTo = (world, a, b, erase) => {
+    g.position.set((a.x + b.x) / 2 + 0.5 - world.sx / 2, (a.y + b.y) / 2 + 0.5,
+      (a.z + b.z) / 2 + 0.5 - world.sz / 2);
+    g.scale.set(Math.abs(b.x - a.x) + 1.04, Math.abs(b.y - a.y) + 1.04, Math.abs(b.z - a.z) + 1.04);
+    tint(erase);
     g.visible = true;
   };
 };
@@ -263,26 +291,26 @@ R.addBeacon = function (world, plot) {
 /* ---- sun & sky ---- */
 R.updateSun = function (t) {
   const a = Math.PI * (0.10 + 0.80 * t);
-  sun.position.set(Math.cos(a) * 340, Math.sin(a) * 300 + 16, 105);
+  sun.position.set(Math.cos(a) * 520, Math.sin(a) * 440 + 20, 160);
   const low = Math.pow(1 - Math.sin(a), 1.4);
   sun.color.copy(SKY.sunDay).lerp(SKY.sunDusk, low);
   sun.intensity = 0.58 + 0.36 * Math.sin(a);
   hemi.intensity = 0.32 + 0.26 * Math.sin(a);
   const sky = SKY.day.clone().lerp(SKY.dusk, low * 0.9);
   scene.background = sky;
-  scene.fog = new THREE.Fog(sky.getHex(), 340, 1100);
+  scene.fog = new THREE.Fog(sky.getHex(), 500, 1650);
 };
 
 /* ---- per-frame effects ---- */
 R.tick = function (elapsed, camDist) {
   const breathe = 0.78 + 0.035 * Math.sin(elapsed * 0.8);
   for (const m of fluidMats) m.opacity = breathe;
-  const fade = THREE.MathUtils.clamp(1.45 - camDist / 520, 0.2, 0.95);
+  const fade = THREE.MathUtils.clamp(1.45 - camDist / 780, 0.2, 0.95);
   for (const sp of sprites) {
     sp.material.opacity = fade;
     // constant screen size: shrink up close, grow (capped) when far
     const d = camera.position.distanceTo(sp.position);
-    const s = THREE.MathUtils.clamp(d * 0.021, 2.2, 8.5);
+    const s = THREE.MathUtils.clamp(d * 0.021, 2.6, 11);
     sp.scale.set(s * sp.userData.aspect, s, 1);
   }
 };

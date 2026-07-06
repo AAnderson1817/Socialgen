@@ -7,7 +7,7 @@
 const SG = (globalThis.SG ||= {});
 const { MAT, PALETTE, SEA } = SG;
 
-const PLOT = 8; // cubes per plot side
+const PLOT = 12; // cubes per plot side — a plot holds a grove, not a tree
 
 const TIERS = [
   { min: 64, tier: 'LANDMARK', price: 2000 },
@@ -20,11 +20,11 @@ const TIERS = [
 // landmark influence radii (cubes): inside `hold` the land is common trust —
 // never sold; inside `near` plots earn the named-place chip and score.
 const INFLUENCE = {
-  lake: { hold: 11, near: 22 }, falls: { hold: 5, near: 20 },
-  cave: { hold: 4, near: 14 }, springs: { hold: 5, near: 14 },
-  arch: { hold: 7, near: 18 }, summit: { hold: 0, near: 16 },
-  pipes: { hold: 0, near: 14 }, harbor: { hold: 0, near: 20 },
-  stacks: { hold: 0, near: 14 },
+  lake: { hold: 16, near: 33 }, falls: { hold: 8, near: 30 },
+  cave: { hold: 6, near: 21 }, springs: { hold: 8, near: 21 },
+  arch: { hold: 10, near: 27 }, summit: { hold: 0, near: 24 },
+  pipes: { hold: 0, near: 21 }, harbor: { hold: 0, near: 30 },
+  stacks: { hold: 0, near: 21 },
 };
 
 function surveyDistrict(world, landmarks) {
@@ -70,9 +70,9 @@ function surveyDistrict(world, landmarks) {
     const dryMean = dry > 0 ? drySum / dry : 0;
     const slope = max - min;
 
-    // …and in a 4-cube band around the parcel line (a wide dry beach between
+    // …and in a 6-cube band around the parcel line (a wide dry beach between
     // the plot and the waterline still sells as waterfront)
-    const BAND = 4;
+    const BAND = 6;
     for (let z = z0 - BAND; z <= z1 + BAND; z++) for (let x = x0 - BAND; x <= x1 + BAND; x++) {
       if (x >= x0 && x <= x1 && z >= z0 && z <= z1) continue;
       const wt = w(x, z);
@@ -87,11 +87,11 @@ function surveyDistrict(world, landmarks) {
       const rz = Math.round(midZ + Math.sin(a) * (PLOT * 1.4));
       cliffDrop = Math.max(cliffDrop, mean - g(rx, rz));
     }
-    const clifftop = mean > SEA + 8 && slope <= 4 && cliffDrop >= 9;
+    const clifftop = mean > SEA + 12 && slope <= 5 && cliffDrop >= 12;
 
     // dominant ground character for the deed's face chip
     const surf = {};
-    for (let z = z0; z <= z1; z += 2) for (let x = x0; x <= x1; x += 2) {
+    for (let z = z0; z <= z1; z += 3) for (let x = x0; x <= x1; x += 3) {
       const y = g(x, z);
       if (y >= 0) { const id = world.get(x, y, z); surf[id] = (surf[id] || 0) + 1; }
     }
@@ -130,7 +130,7 @@ function surveyDistrict(world, landmarks) {
     // terraceable rather than flat: cube terrain steps, buyers bring shovels.
     // up to a third of a plot may be tidal shallows — that's beachfront, not
     // a defect — as long as the dry ground stands above the sea
-    const buildable = !commons && dry >= 40 && dryMean >= SEA + 0.5 && min >= SEA - 2.5 && slope <= 7;
+    const buildable = !commons && dry >= PLOT * PLOT * 2 / 3 && dryMean >= SEA + 0.5 && min >= SEA - 3 && slope <= 9;
     if (buildable) buildableCount++;
 
     const plot = {
@@ -158,8 +158,8 @@ function surveyDistrict(world, landmarks) {
       + (p.springs ? 14 : 0) + (p.clifftop ? 13 : 0) + (p.summit ? 10 : 0)
       + (p.harborside ? 8 : 0)
       + p.elevPct * 18
-      + Math.min(p.trees / 5, 1) * 10
-      + Math.min(p.mineralValue / 60, 1) * 12
+      + Math.min(p.trees / 8, 1) * 10
+      + Math.min(p.mineralValue / 90, 1) * 12
       + (p.slope <= 1 ? 6 : 0)
       + p.named.length * 3; // places where the composition stacks are the jewels
     p.score = Math.round(Math.min(s, 100));

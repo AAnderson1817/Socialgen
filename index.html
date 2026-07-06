@@ -80,7 +80,7 @@
   #buildBtn:hover{border-color:var(--brass)}
   #buildBtn.active{background:var(--brass);color:#141009;border-color:var(--brass);font-weight:500}
 
-  #tileset{left:50%;bottom:18px;transform:translateX(-50%);width:min(560px,calc(100vw - 24px));
+  #tileset{left:50%;bottom:18px;transform:translateX(-50%);width:min(640px,calc(100vw - 24px));
     background:var(--panel);border:1px solid var(--line);border-top:2px solid var(--brass);
     border-radius:2px;padding:10px 12px 12px;backdrop-filter:blur(10px);
     -webkit-backdrop-filter:blur(10px);transition:opacity .18s, transform .18s}
@@ -92,6 +92,8 @@
   .tsbtn{background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);
     font-size:9.5px;letter-spacing:.08em;padding:4px 9px;border-radius:2px;cursor:pointer}
   .tsbtn:hover{border-color:var(--brass);color:var(--brass)}
+  .tsbtn.on{border-color:var(--brass);color:var(--brass);background:rgba(217,164,65,.12)}
+  .tsgroup{display:flex;gap:3px}
   #tiles{display:flex;flex-wrap:wrap;gap:6px}
   .tile{width:30px;height:30px;border:1px solid rgba(236,229,211,.22);border-radius:2px;
     cursor:pointer;padding:0;position:relative}
@@ -157,8 +159,17 @@
     <span class="tslbl">CREATOR&nbsp;MODE</span>
     <span id="tileName">—</span>
     <span class="tsspace"></span>
-    <button id="undoBtn" class="tsbtn" title="Undo (ctrl+Z)">↺ undo</button>
-    <button id="revertBtn" class="tsbtn" title="Revert every edit, restore the authored district">✕ revert all</button>
+    <span class="tsgroup">
+      <button class="tsbtn toolBtn on" data-tool="brush" title="Brush — click or drag to paint">brush</button>
+      <button class="tsbtn toolBtn" data-tool="box" title="Box fill — click two corners">box</button>
+    </span>
+    <span class="tsgroup">
+      <button class="tsbtn sizeBtn on" data-size="1" title="Single cube">1</button>
+      <button class="tsbtn sizeBtn" data-size="2" title="Small blob">2</button>
+      <button class="tsbtn sizeBtn" data-size="3" title="Large blob">3</button>
+    </span>
+    <button id="undoBtn" class="tsbtn" title="Undo (ctrl+Z)">↺</button>
+    <button id="revertBtn" class="tsbtn" title="Revert every edit, restore the authored district">✕ revert</button>
   </div>
   <div id="tiles"></div>
 </div>
