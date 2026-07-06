@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Archipelago — The Lantern, District 01</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#ece5d3; --dim:#8d99a3; --panel:rgba(10,17,22,.86); --line:rgba(236,229,211,.10);
+    --brass:#d9a441; --brass-dk:#a87a24; --invalid:#c4685a; --good:#8fae63;
+    --serif:'Fraunces', Georgia, serif;
+    --mono:'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --sans:ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overflow:hidden;background:#0b141a;color:var(--ink);font-family:var(--sans)}
+  canvas{display:block}
+  .hud{position:fixed;z-index:10}
+  #vignette{position:fixed;inset:0;z-index:5;pointer-events:none;
+    background:radial-gradient(ellipse at 50% 42%, transparent 55%, rgba(5,10,14,.42) 100%)}
+  #loader{position:fixed;inset:0;z-index:40;background:#0b141a;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:10px;transition:opacity .35s}
+  #loader.off{opacity:0;pointer-events:none}
+  #loader .t1{font-family:var(--serif);font-size:20px;letter-spacing:.16em;color:var(--brass)}
+  #loader .t2{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;color:var(--dim)}
+
+  #topbar{top:0;left:0;right:0;display:flex;align-items:flex-start;justify-content:space-between;
+    padding:14px 16px;pointer-events:none}
+  #brand{pointer-events:auto}
+  #brand h1{font-family:var(--serif);font-weight:650;font-size:19px;letter-spacing:.14em;color:var(--ink)}
+  #brand h1 span{color:var(--brass)}
+  #brand .sub{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:3px;letter-spacing:.06em}
+  #tr{display:flex;gap:8px;align-items:center;pointer-events:auto;flex-wrap:wrap;justify-content:flex-end}
+  .pill{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);
+    border-radius:2px;padding:7px 11px;font-family:var(--mono);font-size:11.5px;
+    backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+  .pill .lbl{color:var(--dim);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase}
+  #walletVal{color:var(--brass);font-weight:500}
+  .pill button{background:none;border:1px solid var(--line);color:var(--brass);font-family:var(--mono);
+    font-size:12px;width:20px;height:20px;border-radius:2px;cursor:pointer;line-height:1}
+  .pill button:hover{border-color:var(--brass)}
+
+  #card{left:50%;bottom:18px;transform:translateX(-50%);width:min(430px,calc(100vw - 24px));
+    background:var(--panel);border:1px solid var(--line);border-top:2px solid var(--brass);
+    border-radius:2px;padding:14px 16px 13px;backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);transition:opacity .18s, transform .18s}
+  #card.hidden{opacity:0;transform:translate(-50%,12px);pointer-events:none}
+  #card .eyebrow{font-family:var(--mono);font-size:9px;letter-spacing:.22em;color:var(--dim);
+    text-transform:uppercase;margin-bottom:6px}
+  #card .row1{display:flex;align-items:baseline;gap:10px}
+  #plotName{font-family:var(--serif);font-weight:650;font-size:24px;letter-spacing:.02em}
+  #tierBadge{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    padding:3px 8px;border:1px solid var(--brass-dk);color:var(--brass);border-radius:2px}
+  #tierBadge.na{border-color:var(--invalid);color:var(--invalid)}
+  #tierBadge.lm{border-color:var(--ink);color:var(--ink);background:rgba(217,164,65,.18)}
+  #scoreTxt{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+  #placeTxt{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--brass);
+    text-transform:uppercase;margin-top:4px;min-height:12px}
+  #chips{display:flex;flex-wrap:wrap;gap:6px;margin:9px 0 11px}
+  .chip{font-family:var(--mono);font-size:10px;letter-spacing:.05em;color:var(--ink);
+    background:rgba(236,229,211,.06);border:1px solid var(--line);padding:3px 8px;border-radius:2px}
+  .chip.b{border-color:var(--brass-dk);color:var(--brass)}
+  #card .row2{display:flex;align-items:center;justify-content:space-between;
+    border-top:1px dashed var(--line);padding-top:11px}
+  #priceTxt{font-family:var(--mono);font-size:15px;color:var(--brass)}
+  #priceTxt small{color:var(--dim);font-size:10px;margin-left:6px}
+  #claimBtn{background:var(--brass);color:#141009;border:none;font-family:var(--mono);
+    font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:500;
+    padding:9px 18px;border-radius:2px;cursor:pointer}
+  #claimBtn:hover{background:#e8b658}
+  #ownedTag{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--good);
+    border:1px solid var(--good);padding:8px 14px;border-radius:2px}
+
+  #sunCtl{right:16px;bottom:18px;display:flex;align-items:center;gap:9px;background:var(--panel);
+    border:1px solid var(--line);border-radius:2px;padding:9px 12px;backdrop-filter:blur(8px)}
+  #sunCtl .ico{font-size:13px;color:var(--brass)}
+  #sunCtl input{width:110px;accent-color:var(--brass)}
+  #hints{left:16px;bottom:18px;font-family:var(--mono);font-size:10px;color:var(--dim);
+    letter-spacing:.05em;line-height:1.8;pointer-events:none}
+
+  #toast{top:66px;left:50%;transform:translateX(-50%);background:var(--panel);
+    border:1px solid var(--brass-dk);border-radius:2px;padding:9px 16px;font-family:var(--mono);
+    font-size:11.5px;color:var(--ink);opacity:0;transition:opacity .25s;pointer-events:none;
+    backdrop-filter:blur(8px);max-width:calc(100vw - 32px);text-align:center}
+  #toast.show{opacity:1}
+
+  @media (max-width:560px){
+    #brand h1{font-size:15px}
+    #hints{display:none}
+    #sunCtl{bottom:auto;top:60px;right:12px;padding:7px 9px}
+    #sunCtl input{width:76px}
+    #topbar{padding:10px 12px}
+  }
+</style>
+</head>
+<body>
+<div id="vignette"></div>
+<div id="loader"><div class="t1">THE LANTERN</div><div class="t2">RAISING DISTRICT 01 — CUBE BY CUBE</div></div>
+
+<div id="topbar" class="hud">
+  <div id="brand">
+    <h1>ARCHIPELAGO<span> /</span> THE LANTERN</h1>
+    <div class="sub">DISTRICT 01 · AUTHORED SURVEY · 1 OF 1 · NO REROLLS</div>
+  </div>
+  <div id="tr">
+    <div class="pill"><span class="lbl">Settled</span><span id="occTxt">0 / 0</span></div>
+    <div class="pill"><span class="lbl">Gems</span><span id="walletVal">0 ◆</span><button id="topUp" title="Simulated gem purchase">+</button></div>
+  </div>
+</div>
+
+<div id="card" class="hud hidden">
+  <div class="eyebrow">Certificate of survey · The Lantern, District 01</div>
+  <div class="row1">
+    <span id="plotName">—</span>
+    <span id="tierBadge">—</span>
+    <span id="scoreTxt"></span>
+  </div>
+  <div id="placeTxt"></div>
+  <div id="chips"></div>
+  <div class="row2">
+    <span id="priceTxt"></span>
+    <span id="cardAction"></span>
+  </div>
+</div>
+
+<div id="sunCtl" class="hud">
+  <span class="ico">☀</span>
+  <input type="range" id="sunSlider" min="0" max="100" value="58">
+</div>
+
+<div id="hints" class="hud">
+  drag&nbsp;·&nbsp;orbit&emsp;scroll&nbsp;·&nbsp;zoom&emsp;right-drag / two-finger&nbsp;·&nbsp;pan<br>
+  tap a parcel to survey it&nbsp;·&nbsp;the named places are held in trust
+</div>
+
+<div id="toast" class="hud"></div>
+
+<script src="vendor/three.min.js"></script>
+<script src="src/core/palette.js"></script>
+<script src="src/core/world.js"></script>
+<script src="src/core/mesher.js"></script>
+<script src="src/core/raycast.js"></script>
+<script src="src/core/genesis.js"></script>
+<script src="src/core/survey.js"></script>
+<script src="src/app/render.js"></script>
+<script src="src/app/main.js"></script>
+</body>
+</html>

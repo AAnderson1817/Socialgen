@@ -1,0 +1,11 @@
+{
+  "name": "socialgen",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Archipelago — one authored voxel world, plots people actually want",
+  "type": "module",
+  "scripts": {
+    "test": "node test/run.js",
+    "serve": "node serve.js"
+  }
+}
