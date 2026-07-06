@@ -5,10 +5,12 @@
    Pure JS — no THREE. */
 (() => {
 const SG = (globalThis.SG ||= {});
-const { MAT } = SG;
+const { MAT, PALETTE } = SG;
 
-// origin/dir are in grid space (cube (x,y,z) spans [x,x+1)). dir need not be normalized.
-function raycast(world, ox, oy, oz, dx, dy, dz, maxDist = 1000) {
+// origin/dir are in grid space (cube (x,y,z) spans [x,x+1)). dir need not be
+// normalized. skipFluid treats water like air — used when placing solid cubes
+// so the ray reaches the ground beneath.
+function raycast(world, ox, oy, oz, dx, dy, dz, maxDist = 1000, skipFluid = false) {
   const len = Math.hypot(dx, dy, dz);
   if (len === 0) return null;
   dx /= len; dy /= len; dz /= len;
@@ -26,7 +28,7 @@ function raycast(world, ox, oy, oz, dx, dy, dz, maxDist = 1000) {
   for (let i = 0; i < 4096; i++) {
     if (world.inBounds(x, y, z)) {
       const id = world.get(x, y, z);
-      if (id !== MAT.AIR)
+      if (id !== MAT.AIR && !(skipFluid && PALETTE[id].fluid))
         return { x, y, z, id, t, face, prev: { x: px, y: py, z: pz } };
     }
     px = x; py = y; pz = z;

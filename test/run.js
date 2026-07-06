@@ -191,5 +191,44 @@ section('survey');
     'survey is deterministic end to end');
 }
 
+/* ---------------- editing: place/erase cubes, live re-survey ---------------- */
+section('editing');
+{
+  // raycast can skip fluids so builders reach the ground beneath water
+  const w = new World(16, 32, 16);
+  w.fill(0, 0, 0, 15, 3, 15, MAT.STONE);
+  w.fill(0, 4, 0, 15, 6, 15, MAT.WATER);
+  const wet = SG.raycast(w, 8.5, 20, 8.5, 0, -1, 0);
+  const dry = SG.raycast(w, 8.5, 20, 8.5, 0, -1, 0, 1000, true);
+  ok(wet && wet.y === 6 && wet.id === MAT.WATER, 'default ray stops at the water surface');
+  ok(dry && dry.y === 3 && dry.id === MAT.STONE, 'skipFluid ray reaches the ground beneath');
+
+  // an edit changes exactly what the mesher sees, and erasing restores it
+  const before = SG.meshRegion(w, 0, 0, 16, 16).opaque.indices.length;
+  w.set(8, 4, 8, MAT.BASALT);
+  const placed = SG.meshRegion(w, 0, 0, 16, 16).opaque.indices.length;
+  w.set(8, 4, 8, MAT.WATER);
+  const erased = SG.meshRegion(w, 0, 0, 16, 16).opaque.indices.length;
+  ok(placed > before, 'placing a cube adds faces to the remeshed chunk');
+  ok(erased === before, 'erasing it restores the exact face count');
+
+  // the survey reads edits live: buried ore and dug water reprice the deed
+  const flat = new World(32, 32, 32);
+  flat.fill(0, 0, 0, 31, 0, 31, MAT.BEDROCK);
+  flat.fill(0, 1, 0, 31, SEA, 31, MAT.STONE);
+  flat.fill(0, SEA + 1, 0, 31, SEA + 1, 31, MAT.GRASS);
+  const s1 = SG.surveyDistrict(flat, []);
+  ok(s1.plots.every(p => p.buildable && p.mineralValue === 0 && !p.riverside),
+    'flat control world: all buildable, no minerals, no riverside');
+  flat.set(4, 10, 4, MAT.GOLD_ORE);           // bury gold inside plot (0,0)
+  flat.set(20, SEA + 2, 20, MAT.WATER);       // pooled water above sea near plot (2,2)
+  const s2 = SG.surveyDistrict(flat, []);
+  ok(s2.plots[0].minerals.gold === 1 && s2.plots[0].mineralValue === 6,
+    'buried gold appears in the deed\'s mineral rights');
+  ok(s2.plots[2 * 4 + 2].riverside === true,
+    'dug water above sea level flips the plot to riverside');
+  ok(s2.plots[0].score > s1.plots[0].score, 'the deed repriced upward');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

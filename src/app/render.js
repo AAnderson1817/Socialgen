@@ -46,42 +46,72 @@ R.init = function () {
   R.scene = scene; R.camera = camera; R.renderer = renderer;
 };
 
-/* ---- world meshes ---- */
+/* ---- world meshes: one entry per 32×32 chunk, rebuildable in place ---- */
+const CHUNK = 32;
+R.CHUNK = CHUNK;
+const chunkMeshes = new Map();
+let opaqueMat = null, fluidMat = null;
+
+function geomFrom(arrays) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(arrays.positions, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(arrays.normals, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(arrays.colors, 3));
+  g.setIndex(new THREE.BufferAttribute(arrays.indices, 1));
+  return g;
+}
+
+R.rebuildChunk = function (world, cx, cz) {
+  const key = cx + ',' + cz;
+  const prev = chunkMeshes.get(key);
+  if (prev) for (const m of [prev.opaque, prev.fluid]) if (m) {
+    worldGroup.remove(m); m.geometry.dispose();
+  }
+  const m = SG.meshRegion(world, cx, cz, CHUNK, CHUNK);
+  const entry = { opaque: null, fluid: null };
+  if (m.opaque.indices.length) {
+    const mesh = new THREE.Mesh(geomFrom(m.opaque), opaqueMat);
+    mesh.castShadow = mesh.receiveShadow = SHADOWS;
+    worldGroup.add(mesh);
+    entry.opaque = mesh;
+  }
+  if (m.fluid.indices.length) {
+    const mesh = new THREE.Mesh(geomFrom(m.fluid), fluidMat);
+    mesh.renderOrder = 2;
+    worldGroup.add(mesh);
+    entry.fluid = mesh;
+  }
+  chunkMeshes.set(key, entry);
+};
+
+// after editing cube (x,·,z): remesh its chunk, and any neighbour chunk whose
+// culling/AO could see the change (AO reaches one cube across the border)
+R.rebuildAround = function (world, x, z) {
+  const dirty = new Set();
+  for (const dx of [-1, 0, 1]) for (const dz of [-1, 0, 1]) {
+    const nx = x + dx, nz = z + dz;
+    if (nx < 0 || nx >= world.sx || nz < 0 || nz >= world.sz) continue;
+    dirty.add(Math.floor(nx / CHUNK) * CHUNK + ',' + Math.floor(nz / CHUNK) * CHUNK);
+  }
+  for (const k of dirty) {
+    const [cx, cz] = k.split(',').map(Number);
+    R.rebuildChunk(world, cx, cz);
+  }
+};
+
 R.buildWorld = function (world) {
   worldGroup = new THREE.Group();
   worldGroup.position.set(-world.sx / 2, 0, -world.sz / 2);
   scene.add(worldGroup);
   R.worldGroup = worldGroup;
-
-  const CHUNK = 32;
-  for (let cz = 0; cz < world.sz; cz += CHUNK) for (let cx = 0; cx < world.sx; cx += CHUNK) {
-    const m = SG.meshRegion(world, cx, cz, CHUNK, CHUNK);
-    if (m.opaque.indices.length) {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(m.opaque.positions, 3));
-      g.setAttribute('normal', new THREE.BufferAttribute(m.opaque.normals, 3));
-      g.setAttribute('color', new THREE.BufferAttribute(m.opaque.colors, 3));
-      g.setIndex(new THREE.BufferAttribute(m.opaque.indices, 1));
-      const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true }));
-      mesh.castShadow = mesh.receiveShadow = SHADOWS;
-      worldGroup.add(mesh);
-    }
-    if (m.fluid.indices.length) {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(m.fluid.positions, 3));
-      g.setAttribute('normal', new THREE.BufferAttribute(m.fluid.normals, 3));
-      g.setAttribute('color', new THREE.BufferAttribute(m.fluid.colors, 3));
-      g.setIndex(new THREE.BufferAttribute(m.fluid.indices, 1));
-      const mat = new THREE.MeshLambertMaterial({
-        vertexColors: true, transparent: true, opacity: 0.8,
-        depthWrite: false, side: THREE.DoubleSide,
-      });
-      fluidMats.push(mat);
-      const mesh = new THREE.Mesh(g, mat);
-      mesh.renderOrder = 2;
-      worldGroup.add(mesh);
-    }
-  }
+  opaqueMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  fluidMat = new THREE.MeshLambertMaterial({
+    vertexColors: true, transparent: true, opacity: 0.8,
+    depthWrite: false, side: THREE.DoubleSide,
+  });
+  fluidMats.push(fluidMat);
+  for (let cz = 0; cz < world.sz; cz += CHUNK) for (let cx = 0; cx < world.sx; cx += CHUNK)
+    R.rebuildChunk(world, cx, cz);
 
   // the sea continues past the diorama edge, slightly below the meshed
   // water tops to avoid z-fighting at the seam
@@ -158,6 +188,28 @@ function makeDrape(opacity) {
 R.makeDrapes = function () {
   R.hoverMesh = makeDrape(0.22);
   R.selectMesh = makeDrape(0.4);
+};
+
+/* ---- build-mode ghost cube ---- */
+R.makeGhost = function () {
+  const box = new THREE.BoxGeometry(1.04, 1.04, 1.04);
+  const fill = new THREE.Mesh(box, new THREE.MeshBasicMaterial({
+    color: 0xd9a441, transparent: true, opacity: 0.3, depthWrite: false,
+  }));
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(box),
+    new THREE.LineBasicMaterial({ color: 0xd9a441 }));
+  const g = new THREE.Group();
+  g.add(fill); g.add(edges);
+  g.visible = false;
+  fill.renderOrder = 4;
+  scene.add(g);
+  R.ghost = g;
+  R.ghostTo = (world, x, y, z, erase) => {
+    g.position.set(x + 0.5 - world.sx / 2, y + 0.5, z + 0.5 - world.sz / 2);
+    const c = erase ? 0xc4685a : 0xd9a441;
+    fill.material.color.setHex(c); edges.material.color.setHex(c);
+    g.visible = true;
+  };
 };
 R.drapeTo = function (mesh, world, plot, color) {
   const P = SG.PLOT, pos = mesh.geometry.attributes.position;

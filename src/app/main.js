@@ -10,6 +10,62 @@ let world, landmarks, survey, plots;
 let wallet = 2500, claims = new Set(), selectedIdx = -1;
 const beacons = new Map();
 const SAVE_KEY = 'socialgen-district01-v1';
+const EDITS_KEY = 'socialgen-district01-edits-v1';
+
+/* ---------- creator mode: sculpt the district cube by cube ---------- */
+let buildMode = false, selectedMat = -1; // set to GRASS once palette loads
+const ERASER = -1;
+const edits = new Map();   // "x,y,z" -> id placed (diff vs genesis, replayed on load)
+const undoStack = [];
+
+function applyEdit(x, y, z, id, opts = {}) {
+  if (!world || !world.inBounds(x, y, z)) return false;
+  if (y === 0) return false; // bedrock is forever
+  const prev = world.get(x, y, z);
+  if (prev === id) return false;
+  world.set(x, y, z, id);
+  edits.set(x + ',' + y + ',' + z, id);
+  if (!opts.silent) {
+    undoStack.push({ x, y, z, prev });
+    if (undoStack.length > 500) undoStack.shift();
+  }
+  SG.render.rebuildAround(world, x, z);
+  scheduleResurvey();
+  schedulePersistEdits();
+  return true;
+}
+function undoEdit() {
+  const e = undoStack.pop();
+  if (!e) { toast('Nothing to undo'); return; }
+  applyEdit(e.x, e.y, e.z, e.prev, { silent: true });
+}
+
+// the district is re-surveyed after every edit: dig a canal to your plot and
+// its deed reprices as waterfront — the land market reads the cubes, always
+let resurveyT = null;
+function scheduleResurvey() {
+  clearTimeout(resurveyT);
+  resurveyT = setTimeout(() => {
+    survey = SG.surveyDistrict(world, landmarks);
+    plots = survey.plots;
+    if (SG.app) { SG.app.survey = survey; SG.app.plots = plots; }
+    updateHUD();
+    if (selectedIdx >= 0 && !buildMode) showCard(selectedIdx);
+  }, 450);
+}
+let editsT = null;
+function schedulePersistEdits() {
+  clearTimeout(editsT);
+  editsT = setTimeout(() => {
+    try {
+      localStorage.setItem(EDITS_KEY, JSON.stringify(
+        [...edits].map(([k, id]) => [...k.split(',').map(Number), id])));
+    } catch {}
+  }, 700);
+}
+function loadEdits() {
+  try { return JSON.parse(localStorage.getItem(EDITS_KEY)) || []; } catch { return []; }
+}
 
 /* ---------- camera rig (orbit / pan / zoom, touch-friendly) ---------- */
 const target = new THREE.Vector3(0, 26, 0);
@@ -66,32 +122,73 @@ function onUp(e) {
   pointers.delete(e.pointerId);
   if (wasSingle && downPos) {
     const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
-    if (moved < 7 && Date.now() - downTime < 600 && e.button === 0) pickPlot(e.clientX, e.clientY);
+    if (moved < 7 && Date.now() - downTime < 600) {
+      if (buildMode && (e.button === 0 || e.button === 2)) buildClick(e.clientX, e.clientY, e.button);
+      else if (e.button === 0) pickPlot(e.clientX, e.clientY);
+    }
   }
   if (pointers.size < 2) pinchDist = 0;
 }
 
 /* ---------- picking: exact voxel DDA, no proxy meshes ---------- */
 const raycaster = new THREE.Raycaster();
-function plotFromScreen(px, py) {
+function ddaFromScreen(px, py, skipFluid = false) {
   raycaster.setFromCamera(new THREE.Vector2((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1), R.camera);
   const o = raycaster.ray.origin, d = raycaster.ray.direction;
-  const hit = SG.raycast(world, o.x + world.sx / 2, o.y, o.z + world.sz / 2, d.x, d.y, d.z, 1200);
+  return SG.raycast(world, o.x + world.sx / 2, o.y, o.z + world.sz / 2,
+    d.x, d.y, d.z, 1200, skipFluid);
+}
+function plotFromScreen(px, py) {
+  const hit = ddaFromScreen(px, py);
   if (!hit) return -1;
   const cx = Math.floor(hit.x / SG.PLOT), cz = Math.floor(hit.z / SG.PLOT);
   if (cx < 0 || cx >= survey.grid || cz < 0 || cz >= survey.grid) return -1;
   return cz * survey.grid + cx;
 }
-function hoverPlot() {
+// where would the current tool act, given a screen point?
+function buildTarget(px, py) {
+  const erase = selectedMat === ERASER;
+  const skipFluid = !erase && !SG.PALETTE[selectedMat].fluid;
+  const hit = ddaFromScreen(px, py, skipFluid);
+  if (!hit) return null;
+  if (erase) return { x: hit.x, y: hit.y, z: hit.z, erase: true, id: hit.id };
+  return { x: hit.prev.x, y: hit.prev.y, z: hit.prev.z, erase: false };
+}
+function updateHover() {
   if (!needRay || R.IS_TOUCH || !world) return;
   needRay = false;
-  if (radius > 320) { R.hoverMesh.visible = false; return; }
   const px = (lastNDC.x + 1) / 2 * innerWidth, py = (1 - lastNDC.y) / 2 * innerHeight;
+  if (buildMode) {
+    R.hoverMesh.visible = false;
+    const t = buildTarget(px, py);
+    if (t && world.inBounds(t.x, t.y, t.z) && t.y > 0) R.ghostTo(world, t.x, t.y, t.z, t.erase);
+    else R.ghost.visible = false;
+    return;
+  }
+  R.ghost.visible = false;
+  if (radius > 320) { R.hoverMesh.visible = false; return; }
   const idx = plotFromScreen(px, py);
   if (idx < 0 || idx === selectedIdx) { R.hoverMesh.visible = false; return; }
   const p = plots[idx];
   R.drapeTo(R.hoverMesh, world, p,
     claims.has(idx) ? 0x8fae63 : p.buildable ? 0xd9a441 : 0xc4685a);
+}
+function buildClick(px, py, button) {
+  if (button === 2) { // right-click always erases, whatever tile is selected
+    const hit = ddaFromScreen(px, py);
+    if (!hit) return;
+    if (hit.id === SG.MAT.BEDROCK) { toast('Bedrock is forever'); return; }
+    applyEdit(hit.x, hit.y, hit.z, SG.MAT.AIR);
+    return;
+  }
+  const t = buildTarget(px, py);
+  if (!t) return;
+  if (t.erase) {
+    if (t.id === SG.MAT.BEDROCK) { toast('Bedrock is forever'); return; }
+    applyEdit(t.x, t.y, t.z, SG.MAT.AIR);
+  } else {
+    applyEdit(t.x, t.y, t.z, selectedMat);
+  }
 }
 function pickPlot(px, py) {
   const idx = plotFromScreen(px, py);
@@ -185,6 +282,62 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
 }
 
+/* ---------- the tileset & build toggle ---------- */
+const BUILD_MATS = ['GRASS', 'SOIL', 'SAND', 'GRAVEL', 'CLAY', 'STONE', 'BASALT',
+  'MOSS', 'SNOW', 'WOOD', 'LEAF_PINE', 'LEAF_BROAD', 'COPPER_ORE', 'IRON_ORE',
+  'GOLD_ORE', 'CRYSTAL', 'WATER', 'SPRING'];
+const css = hex => '#' + hex.toString(16).padStart(6, '0');
+
+function buildTileset() {
+  const wrap = $('tiles');
+  const pick = (id, el) => {
+    selectedMat = id;
+    wrap.querySelectorAll('.tile').forEach(t => t.classList.remove('sel'));
+    el.classList.add('sel');
+    $('tileName').textContent = id === ERASER ? 'Eraser' : SG.PALETTE[id].name;
+  };
+  const eraser = document.createElement('button');
+  eraser.className = 'tile eraser';
+  eraser.title = 'Eraser (or right-click any cube)';
+  eraser.textContent = '⌫';
+  eraser.onclick = () => pick(ERASER, eraser);
+  wrap.appendChild(eraser);
+  for (const key of BUILD_MATS) {
+    const e = SG.PALETTE[SG.MAT[key]];
+    const b = document.createElement('button');
+    b.className = 'tile';
+    b.title = e.name;
+    b.style.background = `linear-gradient(160deg, ${css(e.colorTop)} 0 42%, ${css(e.color)} 42% 100%)`;
+    if (e.fluid) b.style.opacity = 0.82;
+    b.onclick = () => pick(e.id, b);
+    wrap.appendChild(b);
+    if (key === 'GRASS') pick(e.id, b); // sensible default tool
+  }
+}
+
+const HINT_SURVEY = 'drag&nbsp;·&nbsp;orbit&emsp;scroll&nbsp;·&nbsp;zoom&emsp;right-drag / two-finger&nbsp;·&nbsp;pan<br>tap a parcel to survey it&nbsp;·&nbsp;the named places are held in trust';
+const HINT_BUILD = 'click&nbsp;·&nbsp;place cube&emsp;right-click&nbsp;·&nbsp;erase&emsp;ctrl+Z&nbsp;·&nbsp;undo<br>B&nbsp;·&nbsp;exit creator mode&emsp;edits re-survey the district live';
+
+function setBuildMode(on) {
+  buildMode = on;
+  $('buildBtn').classList.toggle('active', on);
+  $('tileset').classList.toggle('hidden', !on);
+  $('hints').innerHTML = on ? HINT_BUILD : HINT_SURVEY;
+  if (on) {
+    $('card').classList.add('hidden');
+    R.hoverMesh.visible = false;
+    R.selectMesh.visible = false;
+    toast('Creator mode — the district is yours to sculpt');
+  } else {
+    R.ghost.visible = false;
+    if (selectedIdx >= 0) { // resurface the deed, repriced if the land changed
+      R.drapeTo(R.selectMesh, world, plots[selectedIdx],
+        claims.has(selectedIdx) ? 0x8fae63 : plots[selectedIdx].buildable ? 0xd9a441 : 0xc4685a);
+      showCard(selectedIdx);
+    }
+  }
+}
+
 /* ---------- persistence ---------- */
 function loadSave() {
   try { return JSON.parse(localStorage.getItem(SAVE_KEY)); } catch { return null; }
@@ -201,11 +354,19 @@ function boot() {
     const t0 = performance.now();
     const genesis = SG.buildDistrict01();
     world = genesis.world; landmarks = genesis.landmarks;
+    // replay the creator's saved edits on top of genesis before anything reads the world
+    for (const [x, y, z, id] of loadEdits())
+      if (world.inBounds(x, y, z) && y > 0) {
+        world.set(x, y, z, id);
+        edits.set(x + ',' + y + ',' + z, id);
+      }
     survey = SG.surveyDistrict(world, landmarks);
     plots = survey.plots;
     R.buildWorld(world);
     R.addLandmarks(landmarks, world);
     R.makeDrapes();
+    R.makeGhost();
+    buildTileset();
     const save = loadSave();
     if (save) {
       wallet = typeof save.wallet === 'number' ? save.wallet : 2500;
@@ -214,7 +375,7 @@ function boot() {
     }
     updateHUD();
     R.updateSun($('sunSlider').value / 100);
-    SG.app = { world, landmarks, survey, plots, claims }; // for tooling & tests
+    SG.app = { world, landmarks, survey, plots, claims, applyEdit, setBuildMode }; // for tooling & tests
     console.log('district raised in', Math.round(performance.now() - t0), 'ms');
     requestAnimationFrame(() => requestAnimationFrame(() => $('loader').classList.add('off')));
   }, 80);
@@ -223,7 +384,7 @@ function boot() {
   (function animate() {
     requestAnimationFrame(animate);
     if (!interacted) theta += 0.0006;
-    if (world) { hoverPlot(); R.tick(clock.getElapsedTime(), radius); }
+    if (world) { updateHover(); R.tick(clock.getElapsedTime(), radius); }
     updateCamera();
     R.renderer.render(R.scene, R.camera);
   })();
@@ -233,6 +394,19 @@ function boot() {
   $('topUp').addEventListener('click', () => {
     wallet += 1000; updateHUD(); persist();
     toast('Simulated purchase — $9.99 pack → 1,000 ◆');
+  });
+  $('buildBtn').addEventListener('click', () => setBuildMode(!buildMode));
+  $('undoBtn').addEventListener('click', undoEdit);
+  $('revertBtn').addEventListener('click', () => {
+    if (!edits.size) { toast('No edits to revert'); return; }
+    if (!confirm('Revert every edit and restore the authored district?')) return;
+    try { localStorage.removeItem(EDITS_KEY); } catch {}
+    location.reload();
+  });
+  addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.key === 'b' || e.key === 'B') setBuildMode(!buildMode);
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undoEdit(); }
   });
   addEventListener('contextmenu', e => e.preventDefault());
   document.body.addEventListener('pointerdown', e => {

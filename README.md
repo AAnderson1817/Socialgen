@@ -18,6 +18,14 @@ node serve.js          # → http://localhost:8017
 Open in a browser. Drag to orbit, scroll to zoom, right-drag/two-finger to
 pan, tap a parcel to survey it, claim it with gems (simulated wallet).
 
+**Creator mode** (the ⚒ BUILD button, or `B`): pick a cube from the tileset
+and click to place it; right-click (or the eraser tile) removes; `ctrl+Z`
+undoes; *revert all* restores the authored district. Edits persist in the
+browser and are replayed on top of genesis at load. Crucially, **every edit
+re-surveys the district live** — dig a channel from the sea to an inland
+plot and its deed reprices as Waterfront; bury ore in a column and the deed
+gains mineral rights. The land market reads the cubes, always.
+
 ## Test it
 
 ```
@@ -89,8 +97,9 @@ columns → a 32×32 survey grid, ~250 buildable deeds, 5 at LANDMARK tier.
 
 ## Next
 
-- An in-browser sculpt mode on the same renderer (the authoring tool is the
-  seed of the player build mode)
-- Post-purchase digging/building against the owned column volume
-- Ship the world as a baked `.sgw` data file instead of building at load
+- Sculpt-mode ergonomics: drag-to-paint, brush sizes, box fill, eyedropper
+- Player-scoped building: gate edits to plots whose deed you hold (creator
+  mode already carries the machinery — it just skips the ownership check)
+- Ship the world as a baked `.sgw` data file (sculpt → export) instead of
+  rebuilding genesis + edits at load
 - District 02, when 01 sells out
