@@ -111,6 +111,22 @@
     box-shadow:0 0 0 2px rgba(10,17,22,.4), 0 0 8px rgba(236,229,211,.35)}
   #crosshair.hidden{display:none}
 
+  /* touch walk: floating thumbstick + jump */
+  #stickHint{left:30px;bottom:30px;width:96px;height:96px;border-radius:50%;
+    border:1.5px dashed rgba(236,229,211,.28);pointer-events:none}
+  #stick{width:112px;height:112px;border-radius:50%;pointer-events:none;
+    border:1.5px solid rgba(236,229,211,.35);background:rgba(10,17,22,.25);
+    transform:translate(-50%,-50%)}
+  #stickKnob{position:absolute;left:50%;top:50%;width:44px;height:44px;border-radius:50%;
+    background:rgba(217,164,65,.85);border:1.5px solid rgba(236,229,211,.5);
+    transform:translate(-50%,-50%)}
+  #jumpBtn{right:30px;bottom:34px;width:74px;height:74px;border-radius:50%;
+    background:var(--panel);border:1.5px solid var(--line);color:var(--brass);
+    font-family:var(--mono);font-size:10px;letter-spacing:.14em;cursor:pointer;
+    backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+  #jumpBtn:active{background:var(--brass);color:#141009}
+  #stickHint.hidden,#stick.hidden,#jumpBtn.hidden{display:none}
+
   #tileset{left:50%;bottom:18px;transform:translateX(-50%);width:min(640px,calc(100vw - 24px));
     background:var(--panel);border:1px solid var(--line);border-top:2px solid var(--brass);
     border-radius:2px;padding:10px 12px 12px;backdrop-filter:blur(10px);
@@ -222,6 +238,9 @@
 
 <div id="toast" class="hud"></div>
 <div id="crosshair" class="hud hidden"></div>
+<div id="stickHint" class="hud hidden"></div>
+<div id="stick" class="hud hidden"><div id="stickKnob"></div></div>
+<button id="jumpBtn" class="hud hidden">JUMP</button>
 
 <div id="atlas" class="hud hidden">
   <div class="atlHead"><span>THE LANTERN · DISTRICT ATLAS</span><button id="atlasClose">✕</button></div>

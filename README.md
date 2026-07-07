@@ -32,8 +32,11 @@ stride; a single terrace is a step, two is a wall, and water is honest —
 you wade slow and swim up holding space. Click surveys the parcel ahead
 of the crosshair; select your parcel first and you'll spawn standing on
 it. Esc releases the mouse, Esc again (or the button) returns to the
-survey glass. The physics lives in `src/core/walker.js` — pure JS against
-the same cubes that price the deeds, gated by the headless suite.
+survey glass. On **touch**, the left thumb lands a floating analog stick
+(half-tilt strolls, the rim is a stride), the right thumb looks, a still
+tap surveys, and a JUMP button jumps. The physics lives in
+`src/core/walker.js` — pure JS against the same cubes that price the
+deeds, gated by the headless suite.
 
 **Creator mode** (the ⚒ BUILD button, or `B`): pick a cube from the tileset
 and click — or hold and **drag to paint**. Brush sizes 1/2/3 place single
@@ -172,7 +175,6 @@ sweeps); edits remesh only their 32×32 chunk, batched once per frame.
 
 ## Next
 
-- Touch controls for walk mode (virtual stick; it's keyboard-only today)
 - Ship the world as a baked `.sgw` data file (sculpt → export) instead of
   rebuilding genesis + edits at load
 - Copy/paste stamps and mirrored symmetry for faster authoring

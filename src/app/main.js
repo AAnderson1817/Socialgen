@@ -43,15 +43,46 @@ const mayEdit = (x, y, z) => steward ? { ok: y !== 0 } : SG.canEdit(survey, clai
    only feeds it keys and mouse-look, and pins the camera to its eyes. */
 let walkMode = false, walker = null, yaw = 0, pitch = 0, orbitSave = null;
 const keys = new Set();
+// touch: a floating thumbstick (left) and a look-drag (right); the stick is
+// analog — half-tilt strolls, the rim is a stride
+const stick = { id: null, x: 0, y: 0, mag: 0, baseX: 0, baseY: 0 };
+let lookId = null, lookLast = null, tapInfo = null;
 function walkInput() {
-  const fwd = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
-  const str = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
-  const sp = keys.has('shift') ? 9 : 5.5;
-  let vx = -Math.sin(yaw) * fwd + Math.cos(yaw) * str;
-  let vz = -Math.cos(yaw) * fwd - Math.sin(yaw) * str;
-  const m = Math.hypot(vx, vz);
-  if (m > 0) { vx = vx / m * sp; vz = vz / m * sp; }
-  return { vx, vz, jump: keys.has(' ') };
+  let fwd = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+  let str = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+  let sprint = keys.has('shift');
+  if (stick.id !== null && stick.mag > 0.06) {
+    fwd += -stick.y; str += stick.x;
+    if (stick.mag > 0.92) sprint = true;
+  }
+  const len = Math.hypot(fwd, str);
+  if (!len) return { vx: 0, vz: 0, jump: keys.has(' ') };
+  const sp = (sprint ? 9 : 5.5) * Math.min(len, 1);
+  fwd /= len; str /= len;
+  return {
+    vx: (-Math.sin(yaw) * fwd + Math.cos(yaw) * str) * sp,
+    vz: (-Math.cos(yaw) * fwd - Math.sin(yaw) * str) * sp,
+    jump: keys.has(' '),
+  };
+}
+function stickShow(x, y) {
+  stick.baseX = x; stick.baseY = y; stick.x = stick.y = stick.mag = 0;
+  const el = $('stick');
+  el.style.left = x + 'px'; el.style.top = y + 'px';
+  el.classList.remove('hidden');
+  $('stickKnob').style.transform = 'translate(-50%,-50%)';
+}
+function stickMove(x, y) {
+  const R2 = 48;
+  let dx = x - stick.baseX, dy = y - stick.baseY;
+  const d = Math.hypot(dx, dy);
+  if (d > R2) { dx = dx / d * R2; dy = dy / d * R2; }
+  stick.x = dx / R2; stick.y = dy / R2; stick.mag = Math.min(d / R2, 1);
+  $('stickKnob').style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+}
+function stickHide() {
+  stick.id = null; stick.x = stick.y = stick.mag = 0;
+  $('stick').classList.add('hidden');
 }
 function walkSpawn() { // stand on your parcel if one is selected, else where you were looking
   if (selectedIdx >= 0 && plots[selectedIdx]) {
@@ -89,16 +120,23 @@ function setWalkMode(on) {
     $('crosshair').classList.remove('hidden');
     $('card').classList.add('hidden');
     R.hoverMesh.visible = false; R.ghost.visible = false;
-    $('hints').innerHTML = HINT_WALK;
+    $('hints').innerHTML = R.IS_TOUCH ? HINT_WALK_TOUCH : HINT_WALK;
+    $('stickHint').classList.toggle('hidden', !R.IS_TOUCH);
+    $('jumpBtn').classList.toggle('hidden', !R.IS_TOUCH);
     R.camera.rotation.order = 'YXZ';
     R.camera.fov = 68; R.camera.updateProjectionMatrix();
-    R.renderer.domElement.requestPointerLock?.();
-    toast('On foot — WASD · space · shift; click surveys the land ahead');
+    if (!R.IS_TOUCH) R.renderer.domElement.requestPointerLock?.();
+    toast(R.IS_TOUCH ? 'On foot — left thumb walks, right thumb looks, tap surveys'
+      : 'On foot — WASD · space · shift; click surveys the land ahead');
   } else {
     walkMode = false; walker = null;
     document.exitPointerLock?.();
+    stickHide();
+    lookId = null; lookLast = null;
     $('walkBtn').classList.remove('active');
     $('crosshair').classList.add('hidden');
+    $('stickHint').classList.add('hidden');
+    $('jumpBtn').classList.add('hidden');
     if (orbitSave) { theta = orbitSave.theta; phi = orbitSave.phi; radius = orbitSave.radius; target.copy(orbitSave.target); }
     R.camera.fov = 50; R.camera.updateProjectionMatrix();
     $('hints').innerHTML = HINT_SURVEY;
@@ -203,6 +241,18 @@ function pan(dx, dy) {
 function onDown(e) {
   interacted = true;
   if (walkMode) {
+    if (e.pointerType === 'touch') {
+      // left of centre lands the stick; the rest of the screen looks
+      if (e.clientX < innerWidth * 0.45 && stick.id === null) {
+        stick.id = e.pointerId;
+        stickShow(e.clientX, e.clientY);
+      } else if (lookId === null) {
+        lookId = e.pointerId;
+        lookLast = { x: e.clientX, y: e.clientY };
+        tapInfo = { x: e.clientX, y: e.clientY, t: Date.now() };
+      }
+      return;
+    }
     if (!document.pointerLockElement) R.renderer.domElement.requestPointerLock?.();
     else if (e.button === 0) surveyAtCrosshair();
     return;
@@ -218,6 +268,13 @@ function onDown(e) {
 const lastNDC = new THREE.Vector2(); let needRay = false;
 function onMove(e) {
   if (walkMode) {
+    if (e.pointerId === stick.id) { stickMove(e.clientX, e.clientY); return; }
+    if (e.pointerId === lookId && lookLast) {
+      yaw -= (e.clientX - lookLast.x) * 0.0052;
+      pitch = THREE.MathUtils.clamp(pitch - (e.clientY - lookLast.y) * 0.0046, -1.45, 1.45);
+      lookLast = { x: e.clientX, y: e.clientY };
+      return;
+    }
     if (document.pointerLockElement) {
       yaw -= e.movementX * 0.0023;
       pitch = THREE.MathUtils.clamp(pitch - e.movementY * 0.0021, -1.45, 1.45);
@@ -244,7 +301,16 @@ function onMove(e) {
   }
 }
 function onUp(e) {
-  if (walkMode) return;
+  if (walkMode) {
+    if (e.pointerId === stick.id) stickHide();
+    if (e.pointerId === lookId) {
+      // a quick, still touch on the look side is a survey tap
+      if (tapInfo && Date.now() - tapInfo.t < 350
+        && Math.hypot(e.clientX - tapInfo.x, e.clientY - tapInfo.y) < 9) surveyAtCrosshair();
+      lookId = null; lookLast = null; tapInfo = null;
+    }
+    return;
+  }
   const wasSingle = pointers.size === 1;
   pointers.delete(e.pointerId);
   endBatch(); // closes a paint stroke; harmless otherwise
@@ -652,6 +718,7 @@ const HINT_SURVEY = 'drag&nbsp;·&nbsp;orbit&emsp;scroll&nbsp;·&nbsp;zoom&emsp;
 const HINT_BUILD = 'drag&nbsp;·&nbsp;paint&emsp;alt-drag&nbsp;·&nbsp;orbit&emsp;right-click&nbsp;·&nbsp;erase&emsp;alt-click&nbsp;·&nbsp;sample&emsp;ctrl+Z&nbsp;·&nbsp;undo<br>you shape only the parcels you hold (green)&nbsp;·&nbsp;✪ steward lifts the law&nbsp;·&nbsp;edits re-survey live';
 const HINT_STEWARD = 'drag&nbsp;·&nbsp;paint&emsp;alt-drag&nbsp;·&nbsp;orbit&emsp;right-click&nbsp;·&nbsp;erase&emsp;alt-click&nbsp;·&nbsp;sample&emsp;ctrl+Z&nbsp;·&nbsp;undo<br>✪ steward&nbsp;·&nbsp;the whole district is yours to sculpt&emsp;edits re-survey live';
 const HINT_WALK = 'WASD&nbsp;·&nbsp;walk&emsp;space&nbsp;·&nbsp;jump&emsp;shift&nbsp;·&nbsp;stride&emsp;mouse&nbsp;·&nbsp;look&emsp;click&nbsp;·&nbsp;survey the land ahead<br>Esc&nbsp;·&nbsp;release the mouse&emsp;Esc again (or ⚇)&nbsp;·&nbsp;back to the survey glass';
+const HINT_WALK_TOUCH = 'left thumb&nbsp;·&nbsp;walk (the rim is a stride)&emsp;right thumb&nbsp;·&nbsp;look<br>tap&nbsp;·&nbsp;survey the land ahead&emsp;⚇&nbsp;·&nbsp;back to the survey glass';
 
 function setBuildMode(on) {
   if (on && walkMode) setWalkMode(false); // one pair of feet, one pair of hands
@@ -783,7 +850,9 @@ function boot() {
   });
   $('buildBtn').addEventListener('click', () => setBuildMode(!buildMode));
   $('walkBtn').addEventListener('click', () => setWalkMode(!walkMode));
-  if (R.IS_TOUCH) $('walkBtn').style.display = 'none'; // needs a keyboard, for now
+  $('jumpBtn').addEventListener('pointerdown', e => { e.preventDefault(); keys.add(' '); });
+  $('jumpBtn').addEventListener('pointerup', () => keys.delete(' '));
+  $('jumpBtn').addEventListener('pointercancel', () => keys.delete(' '));
   $('stewardBtn').addEventListener('click', () => setSteward(!steward));
   $('atlasBtn').addEventListener('click', () => setAtlas(!atlasOpen));
   $('atlasClose').addEventListener('click', () => setAtlas(false));
