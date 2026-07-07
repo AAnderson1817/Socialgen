@@ -46,6 +46,16 @@ re-surveys the district live** — dig a channel from the sea to an inland
 plot and its deed reprices as Waterfront; bury ore in a column and the deed
 gains mineral rights. The land market reads the cubes, always.
 
+**The atlas & the sharing surface** (the ▦ MAP button, or `M`): a
+district map drawn from the cubes themselves (`src/core/atlas.js` — top
+colors, height relief, inked seams), with the gazetteer marked, your
+claims outlined, and the walker's position live. Click the map to fly
+there — on foot, to walk there. Every parcel has a **deep link**
+(`#p=10·04`): opening it flies you to the parcel with its deed card up,
+and ⧉ on the card copies it. ⤓ prints the **deed certificate** — a PNG
+document with the parcel's map crop, traits, epithet, and price — drawn
+entirely client-side from the same data that prices the land.
+
 **The tenure law** (`src/core/tenure.js`): the deed is the edit
 permission. You may shape only the parcels you hold — they glow green in
 build mode, the cursor turns hollow slate over everyone else's ground, the
@@ -57,7 +67,7 @@ god-mode, kept honest by a label — and persists with your save.
 ## Test it
 
 ```
-node test/run.js       # 118 headless assertions, no browser needed
+node test/run.js       # 127 headless assertions, no browser needed
 ```
 
 The entire world model is pure JS with zero rendering dependencies, so the
@@ -143,6 +153,8 @@ src/core/   pure JS, no THREE, runs headless in node
                per-deed improvements ledger
   walker.js    first-person physics: AABB vs the grid, gravity, one-cube
                auto-step, honest water — the cubes carry your weight
+  atlas.js     the district map rendered from the cubes (relief + inked
+               seams) + the #p=cx·cz deep-link grammar
 src/app/    THREE.js layer (r128, vendored)
   render.js    chunk meshes, ocean, sun/sky, landmark labels, drapes, beacons
   main.js      camera rig, DDA picking, deed card, wallet, persistence

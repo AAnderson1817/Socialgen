@@ -74,6 +74,7 @@ function surveyAtCrosshair() {
   R.drapeTo(R.selectMesh, world, plots[selectedIdx],
     claims.has(selectedIdx) ? 0x8fae63 : plots[selectedIdx].buildable ? 0xd9a441 : 0xc4685a);
   showCard(selectedIdx);
+  updateHash();
 }
 function setWalkMode(on) {
   if (on === walkMode) return;
@@ -160,6 +161,7 @@ function scheduleResurvey() {
     plots = survey.plots;
     if (SG.app) { SG.app.survey = survey; SG.app.plots = plots; }
     updateHUD();
+    buildAtlasImage(); // sculpting redraws the map
     if (selectedIdx >= 0 && !buildMode) showCard(selectedIdx);
   }, 450);
 }
@@ -358,6 +360,7 @@ function pickPlot(px, py) {
   if (idx < 0) {
     selectedIdx = -1; R.selectMesh.visible = false;
     $('card').classList.add('hidden');
+    updateHash();
     return;
   }
   selectedIdx = idx;
@@ -365,11 +368,176 @@ function pickPlot(px, py) {
   R.drapeTo(R.selectMesh, world, p,
     claims.has(idx) ? 0x8fae63 : p.buildable ? 0xd9a441 : 0xc4685a);
   showCard(idx);
+  updateHash();
+}
+
+/* ---------- the atlas & the sharing surface ----------
+   The map is drawn from the cubes (src/core/atlas.js); parcels are
+   shareable as #p=cx·cz deep links; any deed prints as a certificate. */
+const pad2 = n => String(n).padStart(2, '0');
+let atlasOpen = false, atlasTick = null;
+function buildAtlasImage() {
+  const cv = $('atlasCv');
+  const a = SG.atlasColors(world, geo);
+  cv.getContext('2d').putImageData(new ImageData(a.rgba, a.w, a.h), 0, 0);
+}
+function refreshAtlasMarks() {
+  const wrap = $('atlasMarks');
+  wrap.innerHTML = '';
+  const pct = v => (v / world.sx * 100) + '%';
+  for (const lm of landmarks) {
+    if (!lm.label) continue;
+    const m = document.createElement('div');
+    m.className = 'atlMark';
+    m.style.left = pct(lm.x); m.style.top = pct(lm.z);
+    m.title = lm.name;
+    m.innerHTML = '<div class="d"></div>' + (lm.hold >= 10 ? `<div class="n">${lm.name.toUpperCase()}</div>` : '');
+    wrap.appendChild(m);
+  }
+  const box = (p, cls) => {
+    const b = document.createElement('div');
+    b.className = 'atlBox' + (cls ? ' ' + cls : '');
+    b.style.left = pct(p.x0); b.style.top = pct(p.z0);
+    b.style.width = b.style.height = (SG.PLOT / world.sx * 100) + '%';
+    wrap.appendChild(b);
+  };
+  for (const idx of claims) if (plots[idx]) box(plots[idx]);
+  if (selectedIdx >= 0 && plots[selectedIdx]) box(plots[selectedIdx], 'sel');
+  if (walkMode && walker) {
+    const me = document.createElement('div');
+    me.id = 'atlasMe';
+    me.style.left = pct(walker.x); me.style.top = pct(walker.z);
+    wrap.appendChild(me);
+  }
+}
+function setAtlas(on) {
+  atlasOpen = on;
+  $('atlas').classList.toggle('hidden', !on);
+  $('atlasBtn').classList.toggle('active', on);
+  clearInterval(atlasTick);
+  if (on) {
+    if (walkMode) document.exitPointerLock?.(); // the map needs a cursor
+    refreshAtlasMarks();
+    atlasTick = setInterval(refreshAtlasMarks, 600); // the walker moves
+  }
+}
+function atlasClick(e) {
+  const r = $('atlasWrap').getBoundingClientRect();
+  const wx = (e.clientX - r.left) / r.width * world.sx;
+  const wz = (e.clientY - r.top) / r.height * world.sz;
+  if (walkMode && walker) {
+    walker.place(wx, wz);
+    toast('Stepping to ' + Math.round(wx) + ', ' + Math.round(wz));
+  } else {
+    target.set(wx - world.sx / 2, 32, wz - world.sz / 2);
+    radius = Math.min(radius, 210);
+    interacted = true;
+  }
+  setAtlas(false);
+}
+function updateHash() {
+  const p = selectedIdx >= 0 ? plots[selectedIdx] : null;
+  history.replaceState(null, '', p ? SG.plotLink(p.cx, p.cz) : location.pathname + location.search);
+}
+function flyTo(idx) {
+  const p = plots[idx];
+  target.set(p.x0 + SG.PLOT / 2 - world.sx / 2, Math.max(p.mean, SG.SEA), p.z0 + SG.PLOT / 2 - world.sz / 2);
+  radius = 150; phi = 0.95;
+  interacted = true;
+}
+
+/* ---------- the deed certificate: a parcel, printed ---------- */
+function drawCertificate(p) {
+  const W = 900, H = 1150;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const c = cv.getContext('2d');
+  const mono = '"IBM Plex Mono", Menlo, monospace', serif = 'Fraunces, Georgia, serif';
+  c.fillStyle = '#0d151b'; c.fillRect(0, 0, W, H);
+  c.strokeStyle = '#a87a24'; c.lineWidth = 2; c.strokeRect(26, 26, W - 52, H - 52);
+  c.strokeStyle = 'rgba(217,164,65,.35)'; c.lineWidth = 1; c.strokeRect(34, 34, W - 68, H - 68);
+  c.textAlign = 'center';
+  if ('letterSpacing' in c) c.letterSpacing = '5px';
+  c.fillStyle = '#d9a441';
+  c.save(); c.translate(W / 2, 86); c.rotate(Math.PI / 4); c.fillRect(-8, -8, 16, 16); c.restore();
+  c.font = '500 15px ' + mono;
+  c.fillText('CERTIFICATE OF SURVEY', W / 2, 136);
+  c.fillStyle = '#8d99a3';
+  c.font = '400 12px ' + mono;
+  c.fillText('ARCHIPELAGO · THE LANTERN · DISTRICT 01 · 1 OF 1 · NO REROLLS', W / 2, 162);
+  if ('letterSpacing' in c) c.letterSpacing = '2px';
+  c.fillStyle = '#ece5d3';
+  c.font = '650 64px ' + serif;
+  c.fillText('Parcel ' + pad2(p.cx) + '·' + pad2(p.cz), W / 2, 240);
+  c.fillStyle = '#d9a441';
+  c.font = '500 15px ' + mono;
+  c.fillText((p.commons ? 'COMMONS — HELD IN DISTRICT TRUST' : p.tier + ' · SURVEY ' + p.score + ' / 100'), W / 2, 278);
+  c.fillStyle = '#8d99a3';
+  c.font = '400 13px ' + mono;
+  const where = (p.regionName ? p.regionName.toUpperCase() + ' · ALWAYS ' + p.season.toUpperCase() : '')
+    + (p.named.length ? ' — NEAR ' + p.named.join(' · ').toUpperCase() : '');
+  c.fillText(where, W / 2, 306);
+  // the map, cropped to the parcel's country
+  const src = $('atlasCv');
+  const win = 112, mx = Math.max(0, Math.min(world.sx - win, p.x0 + SG.PLOT / 2 - win / 2));
+  const mz = Math.max(0, Math.min(world.sz - win, p.z0 + SG.PLOT / 2 - win / 2));
+  const MS = 560, MX = (W - MS) / 2, MY = 338;
+  c.imageSmoothingEnabled = false;
+  c.drawImage(src, mx, mz, win, win, MX, MY, MS, MS);
+  c.strokeStyle = 'rgba(236,229,211,.25)'; c.lineWidth = 1; c.strokeRect(MX, MY, MS, MS);
+  c.strokeStyle = '#d9a441'; c.lineWidth = 2.5;
+  c.strokeRect(MX + (p.x0 - mx) / win * MS, MY + (p.z0 - mz) / win * MS, SG.PLOT / win * MS, SG.PLOT / win * MS);
+  // the traits, spelled out
+  c.fillStyle = '#ece5d3';
+  c.font = '400 15px ' + mono;
+  const traits = traitList(p).map(t => t.txt);
+  let line = '', lines = [];
+  for (const t of traits) {
+    const cand = line ? line + '  ·  ' + t : t;
+    if (c.measureText(cand).width > W - 160) { lines.push(line); line = t; } else line = cand;
+  }
+  if (line) lines.push(line);
+  lines.slice(0, 4).forEach((ln, i) => c.fillText(ln, W / 2, MY + MS + 44 + i * 27));
+  // the price
+  c.fillStyle = '#d9a441';
+  c.font = '500 26px ' + mono;
+  c.fillText(p.commons ? 'NOT FOR SALE — EVER' : p.buildable ? p.price.toLocaleString() + ' ◆' : 'UNBUILDABLE', W / 2, MY + MS + 168);
+  c.fillStyle = '#8d99a3';
+  c.font = '400 12px ' + mono;
+  c.fillText(location.origin + location.pathname + SG.plotLink(p.cx, p.cz), W / 2, H - 62);
+  return cv;
 }
 
 /* ---------- the deed card ---------- */
-const pad2 = n => String(n).padStart(2, '0');
 const plotName = p => pad2(p.cx) + '·' + pad2(p.cz);
+// one list, two faces: the card's chips and the certificate's lines
+function traitList(p) {
+  const L = [{ txt: p.groundKind, b: true }];
+  if (p.commons) { L.push({ txt: 'Held in district trust' }); return L; }
+  if (!p.buildable) {
+    L.push({ txt: p.mean <= SG.SEA + 0.5 ? 'Submerged / tidal ground' : 'Slope exceeds survey limit' });
+    return L;
+  }
+  if (p.epithet) L.push({ txt: p.epithet, b: true });
+  if (p.equinox) L.push({ txt: 'Equinox parcel', b: true });
+  if (p.seamFrontage) L.push({ txt: 'Seam frontage' });
+  if (p.waterfront) L.push({ txt: 'Waterfront' });
+  if (p.riverside) L.push({ txt: 'Riverside' });
+  if (p.lakefront) L.push({ txt: 'Lakefront' });
+  if (p.iceShore) L.push({ txt: 'Ice shore' });
+  if (p.blossomFront) L.push({ txt: 'Blossom front' });
+  if (p.emberFront) L.push({ txt: 'Ember front' });
+  if (p.gladePlot) L.push({ txt: p.gladeWood ? 'Clearing in ' + p.gladeWood : 'Clearing' });
+  if (p.orchardRow) L.push({ txt: 'Orchard row' });
+  if (p.springs) L.push({ txt: 'Hot springs' });
+  if (p.clifftop) L.push({ txt: 'Clifftop' });
+  if (p.elevPct > 0.85) L.push({ txt: 'Hilltop' });
+  if (p.trees >= 4) L.push({ txt: 'Forested' });
+  if (p.slope <= 1) L.push({ txt: 'Level ground' });
+  for (const [kind, n] of Object.entries(p.minerals))
+    L.push({ txt: kind.charAt(0).toUpperCase() + kind.slice(1) + ' ×' + n + (p.iceLocked ? ' · under ice' : ''), b: true });
+  return L;
+}
 function showCard(idx) {
   const p = plots[idx];
   $('plotName').textContent = plotName(p);
@@ -386,38 +554,18 @@ function showCard(idx) {
     s.textContent = txt;
     chips.appendChild(s);
   };
-  add(p.groundKind, 'b');
+  for (const t of traitList(p)) add(t.txt, t.b ? 'b' : '');
   if (p.commons) {
     badge.textContent = 'COMMONS'; badge.className = 'lm'; scoreTxt.textContent = '';
-    add('Held in district trust');
     price.innerHTML = 'Not for sale — ever';
     action.innerHTML = '';
   } else if (!p.buildable) {
     badge.textContent = 'UNBUILDABLE'; badge.className = 'na'; scoreTxt.textContent = '';
-    add(p.dryMean !== undefined && p.mean <= SG.SEA + 0.5 ? 'Submerged / tidal ground' : 'Slope exceeds survey limit');
     price.innerHTML = '—'; action.innerHTML = '';
   } else {
     badge.textContent = p.tier;
     badge.className = p.tier === 'LANDMARK' ? 'lm' : '';
     scoreTxt.textContent = 'survey ' + p.score + ' / 100';
-    if (p.epithet) add(p.epithet, 'b');
-    if (p.equinox) add('Equinox parcel', 'b');
-    if (p.seamFrontage) add('Seam frontage');
-    if (p.waterfront) add('Waterfront');
-    if (p.riverside) add('Riverside');
-    if (p.lakefront) add('Lakefront');
-    if (p.iceShore) add('Ice shore');
-    if (p.blossomFront) add('Blossom front');
-    if (p.emberFront) add('Ember front');
-    if (p.gladePlot) add(p.gladeWood ? 'Clearing in ' + p.gladeWood : 'Clearing');
-    if (p.orchardRow) add('Orchard row');
-    if (p.springs) add('Hot springs');
-    if (p.clifftop) add('Clifftop');
-    if (p.elevPct > 0.85) add('Hilltop');
-    if (p.trees >= 4) add('Forested');
-    if (p.slope <= 1) add('Level ground');
-    for (const [kind, n] of Object.entries(p.minerals))
-      add(kind.charAt(0).toUpperCase() + kind.slice(1) + ' ×' + n + (p.iceLocked ? ' · under ice' : ''), 'b');
     if (claims.has(idx)) {
       const shaped = SG.improvements(edits, p);
       if (shaped) add('Shaped ×' + shaped, 'b');
@@ -580,10 +728,26 @@ function boot() {
     }
     updateHUD();
     R.updateSun($('sunSlider').value / 100);
+    buildAtlasImage();
+    // a shared deed link brings you straight to the parcel, card open
+    const link = SG.parsePlotLink(location.hash, survey.grid);
+    if (link) {
+      const idx = link.cz * survey.grid + link.cx;
+      if (plots[idx]) {
+        selectedIdx = idx;
+        flyTo(idx);
+        R.drapeTo(R.selectMesh, world, plots[idx],
+          claims.has(idx) ? 0x8fae63 : plots[idx].buildable ? 0xd9a441 : 0xc4685a);
+        showCard(idx);
+      }
+    }
     SG.app = { // for tooling & tests
       world, landmarks, geo, survey, plots, claims,
       applyEdit, setBuildMode, setSteward, setWalkMode, claim, surveyAtCrosshair,
+      setAtlas, flyTo,
+      certificate: idx => drawCertificate(plots[idx]).toDataURL('image/png'),
       get walker() { return walker; },
+      get selectedIdx() { return selectedIdx; },
       setWalkLook: (y, p) => { yaw = y; pitch = p; },
     };
     console.log('district raised in', Math.round(performance.now() - t0), 'ms');
@@ -621,6 +785,26 @@ function boot() {
   $('walkBtn').addEventListener('click', () => setWalkMode(!walkMode));
   if (R.IS_TOUCH) $('walkBtn').style.display = 'none'; // needs a keyboard, for now
   $('stewardBtn').addEventListener('click', () => setSteward(!steward));
+  $('atlasBtn').addEventListener('click', () => setAtlas(!atlasOpen));
+  $('atlasClose').addEventListener('click', () => setAtlas(false));
+  $('atlasWrap').addEventListener('click', atlasClick);
+  $('shareBtn').addEventListener('click', () => {
+    if (selectedIdx < 0) return;
+    const p = plots[selectedIdx];
+    const url = location.origin + location.pathname + SG.plotLink(p.cx, p.cz);
+    (navigator.clipboard?.writeText(url) || Promise.reject())
+      .then(() => toast('Deed link copied — parcel ' + plotName(p)))
+      .catch(() => toast(url));
+  });
+  $('certBtn').addEventListener('click', () => {
+    if (selectedIdx < 0) return;
+    const p = plots[selectedIdx];
+    const a = document.createElement('a');
+    a.download = 'deed-' + pad2(p.cx) + '-' + pad2(p.cz) + '.png';
+    a.href = drawCertificate(p).toDataURL('image/png');
+    a.click();
+    toast('Certificate issued — parcel ' + plotName(p));
+  });
   $('undoBtn').addEventListener('click', undoEdit);
   $('revertBtn').addEventListener('click', () => {
     if (!edits.size) { toast('No edits to revert'); return; }
@@ -631,12 +815,15 @@ function boot() {
   addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT') return;
     keys.add(e.key.toLowerCase());
+    if (e.key === 'm' || e.key === 'M') setAtlas(!atlasOpen);
     if (walkMode) {
       if (e.key === ' ') e.preventDefault();
-      if (e.key === 'Escape' && !document.pointerLockElement) setWalkMode(false);
+      if (e.key === 'Escape' && !document.pointerLockElement && !atlasOpen) setWalkMode(false);
+      if (e.key === 'Escape' && atlasOpen) setAtlas(false);
       if (e.key === 'b' || e.key === 'B') { setWalkMode(false); setBuildMode(true); }
       return;
     }
+    if (e.key === 'Escape' && atlasOpen) setAtlas(false);
     if (e.key === 'b' || e.key === 'B') setBuildMode(!buildMode);
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undoEdit(); }
   });

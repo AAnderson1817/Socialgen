@@ -74,11 +74,37 @@
   #ownedTag{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--good);
     border:1px solid var(--good);padding:8px 14px;border-radius:2px}
 
-  #buildBtn,#walkBtn{background:var(--panel);border:1px solid var(--line);color:var(--ink);
+  #buildBtn,#walkBtn,#atlasBtn{background:var(--panel);border:1px solid var(--line);color:var(--ink);
     font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;padding:8px 13px;
     border-radius:2px;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
-  #buildBtn:hover,#walkBtn:hover{border-color:var(--brass)}
-  #buildBtn.active,#walkBtn.active{background:var(--brass);color:#141009;border-color:var(--brass);font-weight:500}
+  #buildBtn:hover,#walkBtn:hover,#atlasBtn:hover{border-color:var(--brass)}
+  #buildBtn.active,#walkBtn.active,#atlasBtn.active{background:var(--brass);color:#141009;border-color:var(--brass);font-weight:500}
+
+  #atlas{top:50%;left:50%;transform:translate(-50%,-50%);z-index:30;
+    background:var(--panel);border:1px solid var(--line);border-top:2px solid var(--brass);
+    border-radius:2px;padding:12px 14px 10px;backdrop-filter:blur(12px);
+    -webkit-backdrop-filter:blur(12px);transition:opacity .18s}
+  #atlas.hidden{opacity:0;pointer-events:none}
+  #atlas .atlHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+  #atlas .atlHead span{font-family:var(--mono);font-size:10px;letter-spacing:.22em;color:var(--brass)}
+  #atlasClose{background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);
+    font-size:11px;width:22px;height:22px;border-radius:2px;cursor:pointer;line-height:1}
+  #atlasClose:hover{border-color:var(--brass);color:var(--brass)}
+  #atlasWrap{position:relative;width:min(72vmin,560px);height:min(72vmin,560px);cursor:crosshair}
+  #atlasCv{width:100%;height:100%;image-rendering:pixelated;border:1px solid var(--line);display:block}
+  .atlMark{position:absolute;transform:translate(-50%,-50%);pointer-events:none}
+  .atlMark .d{width:5px;height:5px;background:var(--brass);transform:rotate(45deg);margin:0 auto}
+  .atlMark .n{font-family:var(--mono);font-size:8.5px;letter-spacing:.08em;color:var(--ink);
+    text-shadow:0 0 4px #05090c,0 0 4px #05090c;white-space:nowrap;margin-top:2px}
+  .atlBox{position:absolute;border:1px solid var(--good);pointer-events:none;box-sizing:border-box}
+  .atlBox.sel{border:1.5px solid var(--brass);box-shadow:0 0 7px rgba(217,164,65,.6)}
+  #atlasMe{position:absolute;width:7px;height:7px;border-radius:50%;background:#ece5d3;
+    border:1.5px solid #0b141a;box-shadow:0 0 7px rgba(236,229,211,.8);transform:translate(-50%,-50%);pointer-events:none}
+  #atlas .atlFoot{font-family:var(--mono);font-size:9.5px;color:var(--dim);letter-spacing:.06em;margin-top:8px}
+
+  .cardTool{background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);
+    font-size:11px;width:24px;height:24px;border-radius:2px;cursor:pointer;line-height:1}
+  .cardTool:hover{border-color:var(--brass);color:var(--brass)}
 
   #crosshair{top:50%;left:50%;transform:translate(-50%,-50%);width:5px;height:5px;
     border-radius:50%;background:rgba(236,229,211,.92);pointer-events:none;
@@ -140,6 +166,7 @@
   <div id="tr">
     <div class="pill"><span class="lbl">Settled</span><span id="occTxt">0 / 0</span></div>
     <div class="pill"><span class="lbl">Gems</span><span id="walletVal">0 ◆</span><button id="topUp" title="Simulated gem purchase">+</button></div>
+    <button id="atlasBtn" title="The district atlas (M)">▦ MAP</button>
     <button id="walkBtn" title="Walk the district on foot — first person">⚇ WALK</button>
     <button id="buildBtn" title="Creator mode — sculpt the district (B)">⚒ BUILD</button>
   </div>
@@ -151,6 +178,8 @@
     <span id="plotName">—</span>
     <span id="tierBadge">—</span>
     <span id="scoreTxt"></span>
+    <button id="shareBtn" class="cardTool" title="Copy a link to this parcel">⧉</button>
+    <button id="certBtn" class="cardTool" title="Download the deed certificate (PNG)">⤓</button>
   </div>
   <div id="placeTxt"></div>
   <div id="chips"></div>
@@ -194,6 +223,12 @@
 <div id="toast" class="hud"></div>
 <div id="crosshair" class="hud hidden"></div>
 
+<div id="atlas" class="hud hidden">
+  <div class="atlHead"><span>THE LANTERN · DISTRICT ATLAS</span><button id="atlasClose">✕</button></div>
+  <div id="atlasWrap"><canvas id="atlasCv" width="384" height="384"></canvas><div id="atlasMarks"></div></div>
+  <div class="atlFoot">drawn from the cubes · click to fly there — on foot, to walk there</div>
+</div>
+
 <script src="vendor/three.min.js"></script>
 <script src="src/core/palette.js"></script>
 <script src="src/core/world.js"></script>
@@ -205,6 +240,7 @@
 <script src="src/core/survey.js"></script>
 <script src="src/core/tenure.js"></script>
 <script src="src/core/walker.js"></script>
+<script src="src/core/atlas.js"></script>
 <script src="src/app/render.js"></script>
 <script src="src/app/main.js"></script>
 </body>

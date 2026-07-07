@@ -10,6 +10,7 @@ import '../src/core/flora.js';
 import '../src/core/survey.js';
 import '../src/core/tenure.js';
 import '../src/core/walker.js';
+import '../src/core/atlas.js';
 
 const SG = globalThis.SG;
 const { MAT, PALETTE, World, SEA, REGION } = SG;
@@ -708,6 +709,42 @@ section('walker');
   // the district has edges
   const edge = run(SG.createWalker(w, 45.5, 5.5), 3, { vx: 6 });
   ok(edge.x < 47.8 && edge.x > 46.5, 'the walker stays on the district');
+}
+
+/* ---------------- the atlas: the map is drawn from the cubes ---------------- */
+section('atlas');
+{
+  const a1 = SG.atlasColors(world, geo);
+  ok(a1.w === world.sx && a1.h === world.sz && a1.rgba.length === world.sx * world.sz * 4,
+    'one pixel per column, fully painted');
+  const a2 = SG.atlasColors(world, geo);
+  let same = true;
+  for (let i = 0; i < a1.rgba.length; i += 997) if (a1.rgba[i] !== a2.rgba[i]) { same = false; break; }
+  ok(same, 'the atlas is deterministic');
+  const sea = 4 * (4 * world.sx + 4); // open water at (4,4)
+  ok(a1.rgba[sea + 2] > a1.rgba[sea] && a1.rgba[sea + 3] === 255, 'the open sea reads blue');
+  // a Hush snowfield reads pale
+  let snowPix = -1;
+  for (let z = 40; z < 120 && snowPix < 0; z++) for (let x = 100; x < 260; x++) {
+    const h = world.surfaceAt(x, z);
+    if (h > SEA && world.get(x, h, z) === MAT.SNOW && world.heightAt(x, z) === h) { snowPix = 4 * (z * world.sx + x); break; }
+  }
+  ok(snowPix >= 0 && a1.rgba[snowPix] > 150 && a1.rgba[snowPix + 1] > 150 && a1.rgba[snowPix + 2] > 150,
+    'a snowfield reads pale on the map');
+  // seams ink darker than the same column drawn without geo
+  const plain = SG.atlasColors(world);
+  let seamPix = -1;
+  for (let i = 0; i < geo.seamDist.length; i++)
+    if (geo.seamDist[i] < 1.2 && world.surfaceAt(i % world.sx, Math.floor(i / world.sx)) > SEA
+      && world.heightAt(i % world.sx, Math.floor(i / world.sx)) === world.surfaceAt(i % world.sx, Math.floor(i / world.sx))) { seamPix = i * 4; break; }
+  ok(seamPix >= 0 && a1.rgba[seamPix] < plain.rgba[seamPix], 'the seams are inked on the map');
+  // deep links
+  const L = SG.plotLink(7, 22);
+  ok(L === '#p=07·22', 'a deed names its link in survey notation');
+  ok(JSON.stringify(SG.parsePlotLink(L, 32)) === '{"cx":7,"cz":22}', 'the link round-trips');
+  ok(JSON.stringify(SG.parsePlotLink('#p=07,22', 32)) === '{"cx":7,"cz":22}', 'typed commas are forgiven');
+  ok(SG.parsePlotLink('#p=99·00', 32) === null && SG.parsePlotLink('#nonsense', 32) === null,
+    'off-district and garbage links refuse');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
