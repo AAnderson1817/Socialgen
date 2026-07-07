@@ -6,11 +6,11 @@ const SG = globalThis.SG;
 const R = SG.render;
 const $ = id => document.getElementById(id);
 
-let world, landmarks, survey, plots;
+let world, landmarks, geo, survey, plots;
 let wallet = 2500, claims = new Set(), selectedIdx = -1;
 const beacons = new Map();
-const SAVE_KEY = 'socialgen-district01-v2';
-const EDITS_KEY = 'socialgen-district01-edits-v2';
+const SAVE_KEY = 'socialgen-district01-v3';
+const EDITS_KEY = 'socialgen-district01-edits-v3';
 
 /* ---------- creator mode: sculpt the district cube by cube ---------- */
 let buildMode = false, selectedMat = -1; // set to GRASS once palette loads
@@ -68,7 +68,7 @@ let resurveyT = null;
 function scheduleResurvey() {
   clearTimeout(resurveyT);
   resurveyT = setTimeout(() => {
-    survey = SG.surveyDistrict(world, landmarks);
+    survey = SG.surveyDistrict(world, landmarks, geo);
     plots = survey.plots;
     if (SG.app) { SG.app.survey = survey; SG.app.plots = plots; }
     updateHUD();
@@ -267,7 +267,10 @@ const plotName = p => pad2(p.cx) + '·' + pad2(p.cz);
 function showCard(idx) {
   const p = plots[idx];
   $('plotName').textContent = plotName(p);
-  $('placeTxt').textContent = p.named.length ? 'near ' + p.named.join(' · ') : '';
+  const where = [];
+  if (p.regionName) where.push(p.regionName + (p.season ? ' · always ' + p.season : ''));
+  if (p.named.length) where.push('near ' + p.named.join(' · '));
+  $('placeTxt').textContent = where.join(' — ');
   const badge = $('tierBadge'), chips = $('chips'), price = $('priceTxt'),
         action = $('cardAction'), scoreTxt = $('scoreTxt');
   chips.innerHTML = '';
@@ -291,21 +294,24 @@ function showCard(idx) {
     badge.textContent = p.tier;
     badge.className = p.tier === 'LANDMARK' ? 'lm' : '';
     scoreTxt.textContent = 'survey ' + p.score + ' / 100';
+    if (p.epithet) add(p.epithet, 'b');
+    if (p.equinox) add('Equinox parcel', 'b');
+    if (p.seamFrontage) add('Seam frontage');
     if (p.waterfront) add('Waterfront');
     if (p.riverside) add('Riverside');
     if (p.lakefront) add('Lakefront');
-    if (p.fallsView) add('Falls view');
-    if (p.caveMouth) add('Cave mouth');
-    if (p.archView) add('Arch view');
+    if (p.iceShore) add('Ice shore');
+    if (p.blossomFront) add('Blossom front');
+    if (p.emberFront) add('Ember front');
+    if (p.gladePlot) add(p.gladeWood ? 'Clearing in ' + p.gladeWood : 'Clearing');
+    if (p.orchardRow) add('Orchard row');
     if (p.springs) add('Hot springs');
     if (p.clifftop) add('Clifftop');
-    if (p.summit) add('Summit shoulder');
-    if (p.harborside) add('Harborside');
     if (p.elevPct > 0.85) add('Hilltop');
     if (p.trees >= 4) add('Forested');
     if (p.slope <= 1) add('Level ground');
     for (const [kind, n] of Object.entries(p.minerals))
-      add(kind.charAt(0).toUpperCase() + kind.slice(1) + ' ×' + n, 'b');
+      add(kind.charAt(0).toUpperCase() + kind.slice(1) + ' ×' + n + (p.iceLocked ? ' · under ice' : ''), 'b');
     if (claims.has(idx)) {
       price.innerHTML = 'Deed held';
       action.innerHTML = '<span id="ownedTag">SETTLED</span>';
@@ -340,9 +346,13 @@ function toast(msg) {
 }
 
 /* ---------- the tileset & build toggle ---------- */
-const BUILD_MATS = ['GRASS', 'SOIL', 'SAND', 'GRAVEL', 'CLAY', 'STONE', 'BASALT',
-  'MOSS', 'SNOW', 'WOOD', 'LEAF_PINE', 'LEAF_BROAD', 'COPPER_ORE', 'IRON_ORE',
-  'GOLD_ORE', 'CRYSTAL', 'WATER', 'SPRING'];
+const BUILD_MATS = ['GRASS', 'GRASS_SPRING', 'GRASS_DUN', 'FOREST_FLOOR', 'SOIL', 'SAND',
+  'GRAVEL', 'CLAY', 'STONE', 'BASALT', 'MOSS', 'SNOW', 'ICE', 'ICE_BLUE',
+  'FLOWERS_WHITE', 'FLOWERS_GOLD', 'WOOD', 'BARK_BIRCH',
+  'LEAF_PINE', 'LEAF_BROAD', 'LEAF_SPRING', 'LEAF_BLOSSOM', 'LEAF_WILLOW',
+  'LEAF_EMBER', 'LEAF_GOLD', 'LEAF_SCARLET', 'LEAF_SPRUCE', 'LEAF_FROST',
+  'BUSH_GREEN', 'BUSH_BRAMBLE', 'BRASS',
+  'COPPER_ORE', 'IRON_ORE', 'GOLD_ORE', 'CRYSTAL', 'WATER', 'SPRING', 'MILKWATER'];
 const css = hex => '#' + hex.toString(16).padStart(6, '0');
 
 function buildTileset() {
@@ -422,17 +432,17 @@ function boot() {
   setTimeout(async () => {
     const t0 = performance.now();
     const genesis = SG.buildDistrict01();
-    world = genesis.world; landmarks = genesis.landmarks;
+    world = genesis.world; landmarks = genesis.landmarks; geo = genesis.geo;
     // replay the creator's saved edits on top of genesis before anything reads the world
     for (const [x, y, z, id] of loadEdits())
       if (world.inBounds(x, y, z) && y > 0) {
         world.set(x, y, z, id);
         edits.set(x + ',' + y + ',' + z, id);
       }
-    survey = SG.surveyDistrict(world, landmarks);
+    survey = SG.surveyDistrict(world, landmarks, geo);
     plots = survey.plots;
     await R.buildWorld(world, f =>
-      loadTxt.textContent = `RAISING DISTRICT 01 — CUBE BY CUBE · ${Math.round(f * 100)}%`);
+      loadTxt.textContent = `RAISING THE FOUR WATCHES — CUBE BY CUBE · ${Math.round(f * 100)}%`);
     R.addLandmarks(landmarks, world);
     R.makeDrapes();
     R.makeGhost();
@@ -445,7 +455,7 @@ function boot() {
     }
     updateHUD();
     R.updateSun($('sunSlider').value / 100);
-    SG.app = { world, landmarks, survey, plots, claims, applyEdit, setBuildMode }; // for tooling & tests
+    SG.app = { world, landmarks, geo, survey, plots, claims, applyEdit, setBuildMode }; // for tooling & tests
     console.log('district raised in', Math.round(performance.now() - t0), 'ms');
     requestAnimationFrame(() => requestAnimationFrame(() => $('loader').classList.add('off')));
   }, 80);

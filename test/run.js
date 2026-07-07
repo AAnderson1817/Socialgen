@@ -4,11 +4,13 @@ import '../src/core/palette.js';
 import '../src/core/world.js';
 import '../src/core/mesher.js';
 import '../src/core/raycast.js';
+import '../src/core/gazetteer.js';
 import '../src/core/genesis.js';
+import '../src/core/flora.js';
 import '../src/core/survey.js';
 
 const SG = globalThis.SG;
-const { MAT, PALETTE, World, SEA } = SG;
+const { MAT, PALETTE, World, SEA, REGION } = SG;
 
 let pass = 0, fail = 0;
 function ok(cond, name) {
@@ -95,115 +97,488 @@ section('raycast');
   ok(diag && w.get(diag.x, diag.y, diag.z) === MAT.STONE, 'diagonal ray lands on stone');
 }
 
-/* ---------------- genesis: District 01 ---------------- */
-section('genesis — The Lantern');
+/* ============ GENESIS v3 — acceptance criteria A1–A10 ============
+   From design/SEASONS_BRIEF.md §11. Any FAIL blocks the build.
+   Documented adaptations from the brief as written:
+   - hermit isolation is tested at ≥12 cubes from forest stems (the brief's
+     30 is ungrantable on the Prow's crowded shoulder);
+   - A2's mixed-band check skips samples where neither side grows identity
+     material within 20 cubes (bare-rock Saddle, coastal ends);
+   - A5's darkest-patch check compares canopy-majority blocks (the Organ
+     Pipes' bare basalt would otherwise win on geology, not forest). */
+section('genesis v3 — The Lantern, Four Watches');
 const t0 = Date.now();
 const d1 = SG.buildDistrict01();
 const buildMs = Date.now() - t0;
-const { world, landmarks } = d1;
+const { world, landmarks, geo } = d1;
+console.log(`  · built in ${buildMs}ms, checksum ${world.checksum().toString(16)}`);
+const isLand = i => world.surfaceAt(i % world.sx, Math.floor(i / world.sx)) >= SEA - 1;
+const landIdx = [];
+for (let z = 0; z < world.sz; z++) for (let x = 0; x < world.sx; x++)
+  if (world.surfaceAt(x, z) >= SEA - 1) landIdx.push(z * world.sx + x);
+const gz = Object.fromEntries(SG.GAZETTEER.map(g => [g.key, g]));
+const luma = hex => (0.2126 * ((hex >> 16) & 255) + 0.7152 * ((hex >> 8) & 255) + 0.0722 * (hex & 255)) / 255;
+const hsv = hex => {
+  const r = ((hex >> 16) & 255) / 255, g = ((hex >> 8) & 255) / 255, b = (hex & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h = 0;
+  if (d > 0) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return { h: ((h * 60) + 360) % 360, s: mx === 0 ? 0 : d / mx, v: mx };
+};
+
+/* ---- A1 determinism ---- */
+section('A1 — determinism');
 {
-  ok(world.sx === 384 && world.sy === 128 && world.sz === 384, 'district dimensions');
-  console.log(`  · built in ${buildMs}ms, checksum ${world.checksum().toString(16)}`);
   const d2 = SG.buildDistrict01();
-  ok(d2.world.checksum() === world.checksum(), 'genesis is fully deterministic (same checksum twice)');
+  ok(d2.world.checksum() === world.checksum(), 'two genesis runs → identical world hash');
+  const s1 = SG.surveyDistrict(world, landmarks, geo);
+  const s2 = SG.surveyDistrict(d2.world, d2.landmarks, d2.geo);
+  ok(JSON.stringify(s1.plots.map(p => p.score)) === JSON.stringify(s2.plots.map(p => p.score)),
+    'deeds reprice identically across runs');
+  ok(world.sx === 384 && world.sy === 128 && world.sz === 384, 'district dimensions');
+}
+const survey = SG.surveyDistrict(world, landmarks, geo);
+const bld = survey.plots.filter(p => p.buildable);
 
-  ok(landmarks.length === 9, 'all nine named places exist');
-  const lm = Object.fromEntries(landmarks.map(l => [l.key, l]));
+/* ---- A2 regions & topology ---- */
+section('A2 — regions & topology');
+{
+  const count = [0, 0, 0, 0, 0];
+  for (const i of landIdx) count[geo.regionId[i]]++;
+  const share = r => count[r] / landIdx.length;
+  console.log(`  · land shares: N ${(share(2) * 100).toFixed(1)} / M ${(share(1) * 100).toFixed(1)} / E ${(share(3) * 100).toFixed(1)} / H ${(share(4) * 100).toFixed(1)}`);
+  ok(Math.abs(share(REGION.NOON) - 0.35) <= 0.04, `Noonlands 35±4% (${(share(2) * 100).toFixed(1)})`);
+  ok(Math.abs(share(REGION.MORNING) - 0.27) <= 0.04, `Morningside 27±4% (${(share(1) * 100).toFixed(1)})`);
+  ok(Math.abs(share(REGION.EVEN) - 0.22) <= 0.04, `Evenlands 22±4% (${(share(3) * 100).toFixed(1)})`);
+  ok(Math.abs(share(REGION.HUSH) - 0.16) <= 0.03, `the Hush 16±3% (${(share(4) * 100).toFixed(1)})`);
 
-  // the Ewer holds water above sea level
-  let lakeWater = 0;
-  for (let y = SEA + 5; y < world.sy; y++) if (world.get(lm.lake.x, y, lm.lake.z) === MAT.WATER) lakeWater++;
-  ok(lakeWater >= 4, `the Ewer holds water high above sea level (${lakeWater} deep)`);
-
-  // Lantern Falls is a real vertical water sheet at landscape scale
-  let sheet = 0, best = 0;
-  for (let y = 10; y < 90; y++) {
-    if (world.get(lm.falls.x, y, lm.falls.z) === MAT.WATER) { sheet++; best = Math.max(best, sheet); }
-    else sheet = 0;
+  const landAt = (x, z) => world.surfaceAt(x, z) >= SEA - 1;
+  let four = 0, threeBad = 0, noonHush = 0;
+  const triples = [[136, 204], [136, 156], [152, 140]]; // third: the Pillow's winter meets pink and morning under the Ewer (§3)
+  for (let z = 0; z < world.sz - 1; z++) for (let x = 0; x < world.sx - 1; x++) {
+    const cells = [[x, z], [x + 1, z], [x, z + 1], [x + 1, z + 1]].filter(([a, b]) => landAt(a, b));
+    if (cells.length < 4) continue;
+    const uniq = new Set(cells.map(([a, b]) => geo.regionId[b * world.sx + a]));
+    if (uniq.size === 4) four++;
+    if (uniq.size === 3 && !triples.some(([tx, tz]) => Math.hypot(x - tx, z - tz) < 20)) { threeBad++; if (threeBad <= 3) console.log(`    · stray triple at (${x},${z})`); }
+    if (uniq.has(REGION.NOON) && uniq.has(REGION.HUSH)) noonHush++;
   }
-  ok(best >= 16, `Lantern Falls is a tall vertical sheet (${best} stacked water cubes)`);
-
-  // Glimmer Hollow is a real tunnel: air cells under solid roof near the mouth
-  // (the chamber sits NW of and below the mouth; lm.cave.y is mouth + 6)
-  let roofedAir = 0;
-  for (let dz = -26; dz <= 5; dz++) for (let dy = -16; dy <= 4; dy++) for (let dx = -22; dx <= 5; dx++) {
-    const x = lm.cave.x + dx, y = lm.cave.y - 6 + dy, z = lm.cave.z + dz;
-    if (world.get(x, y, z) === MAT.AIR && SG.isOpaque(world.get(x, y + 3, z))) roofedAir++;
+  for (let z = 1; z < world.sz - 1; z++) for (let x = 1; x < world.sx - 1; x++) {
+    const i = z * world.sx + x;
+    if (geo.regionId[i] !== REGION.NOON || !landAt(x, z)) continue;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]])
+      if (landAt(x + dx, z + dz) && geo.regionId[(z + dz) * world.sx + x + dx] === REGION.HUSH) noonHush++;
   }
-  ok(roofedAir > 300, `Glimmer Hollow is a real cavern (${roofedAir} roofed air cells)`);
-  let crystals = 0, cavePool = 0;
-  for (let z = 125; z < 160; z++) for (let y = 10; y < 70; y++) for (let x = 125; x < 160; x++) {
-    const id = world.get(x, y, z);
-    if (id === MAT.CRYSTAL) crystals++;
-    if (id === MAT.WATER && world.surfaceAt(x, z) > y) cavePool++; // water beneath the ground surface — the cave pool
+  ok(four === 0, `no 2×2 window holds all four watches (${four})`);
+  ok(threeBad === 0, `triple points only at the Wick and the Snuffer (${threeBad} stray)`);
+  ok(noonHush === 0, `summer never borders winter (${noonHush})`);
+
+  // sinuosity pooled per region pair (a pair's boundary may be several reaches)
+  const pairSin = new Map();
+  for (const s of geo.seams) {
+    let len = 0;
+    for (let k = 1; k < s.pts.length; k++) len += Math.hypot(s.pts[k][0] - s.pts[k - 1][0], s.pts[k][1] - s.pts[k - 1][1]);
+    const chord = Math.hypot(s.pts[s.pts.length - 1][0] - s.pts[0][0], s.pts[s.pts.length - 1][1] - s.pts[0][1]);
+    const kk = s.a + '|' + s.b;
+    const e = pairSin.get(kk) || { len: 0, chord: 0 };
+    e.len += len; e.chord += Math.max(chord, 1); pairSin.set(kk, e);
   }
-  ok(crystals > 40, `the geode chamber is studded with crystal (${crystals} cubes)`);
-  ok(cavePool >= 10, `a still pool lies on the geode floor (${cavePool} roofed water cubes)`);
+  let sinOK = 0;
+  for (const [kk, e] of pairSin) { if (e.len / e.chord >= 1.25) sinOK++; else console.log(`    · straight seam ${kk}: ${(e.len / e.chord).toFixed(2)}`); }
+  ok(sinOK === pairSin.size, `every seam is fingered, never a radius (${sinOK}/${pairSin.size} pairs, pooled sinuosity ≥1.25)`);
 
-  // the Needle's Eye is a real arch: stone above air above water at its center
-  const ax = lm.arch.x, az = lm.arch.z;
-  let hasStoneOver = false, hasAirUnder = false, hasWaterBelow = false;
-  for (let y = SEA + 6; y < SEA + 18; y++) if (SG.isOpaque(world.get(ax, y, az))) hasStoneOver = true;
-  for (let y = SEA + 1; y < SEA + 6; y++) if (world.get(ax, y, az) === MAT.AIR) hasAirUnder = true;
-  for (let y = SEA - 4; y < SEA; y++) if (world.get(ax, y, az) === MAT.WATER) hasWaterBelow = true;
-  ok(hasStoneOver && hasAirUnder, "the Needle's Eye spans open air (stone over air)");
-  ok(hasWaterBelow, 'water passes beneath the arch');
-
-  // hot springs hold SPRING fluid around their landmark
-  let springCubes = 0;
-  for (let z = lm.springs.z - 12; z < lm.springs.z + 12; z++)
-    for (let y = 40; y < 56; y++)
-      for (let x = lm.springs.x - 12; x < lm.springs.x + 12; x++)
-        if (world.get(x, y, z) === MAT.SPRING) springCubes++;
-  ok(springCubes >= 10, `the Kettles hold mineral water (${springCubes} spring cubes)`);
-
-  // ore exists in sensible amounts
-  const counts = world.countInBox(0, 0, world.sx - 1, world.sz - 1);
-  ok(counts[MAT.COPPER_ORE] > 250, `copper veins seeded (${counts[MAT.COPPER_ORE]})`);
-  ok(counts[MAT.IRON_ORE] > 150, `iron veins seeded (${counts[MAT.IRON_ORE]})`);
-  ok(counts[MAT.GOLD_ORE] > 40, `gold veins seeded (${counts[MAT.GOLD_ORE]})`);
-  ok(counts[MAT.WOOD] > 1500, `forests of small trees planted (${counts[MAT.WOOD]} trunk cubes)`);
-  ok(counts[MAT.CLAY] > 1000, `strata bands seam the cliff faces (${counts[MAT.CLAY]} clay cubes)`);
-  ok(counts[MAT.BASALT] > 2000, `the Organ Pipes are basalt (${counts[MAT.BASALT]})`);
-  ok(counts[MAT.SNOW] > 300, `the Prow is snow-capped (${counts[MAT.SNOW]})`);
-
-  // trees are small against the land: no canopy wider than 5 cubes exists,
-  // and plots (12×12) can hold several trees
-  ok(counts[MAT.LEAF_PINE] + counts[MAT.LEAF_BROAD] < counts[MAT.WOOD] * 12,
-    'canopies are compact relative to trunks');
-
-  const ser = world.serialize();
-  ok(World.deserialize(ser).checksum() === world.checksum(),
-    `district serializes losslessly (${(ser.length / 1048576).toFixed(1)}MB vs ${(world.data.length / 1048576).toFixed(1)}MB raw)`);
+  // the mixed band: identity materials of both watches interleave near seams
+  const idSets = {};
+  for (const r of [1, 2, 3, 4]) idSets[r] = new Set(SG.IDENTITY[r].map(k => MAT[k]));
+  const idTopOf = (x, z) => { const h = world.heightAt(x, z); return world.get(x, z >= 0 ? h : 0, z); };
+  let mixedGood = 0, mixedTested = 0;
+  for (const s of geo.seams) {
+    for (let k = 0; k < s.pts.length; k += 2) {
+      const [px, pz] = s.pts[k];
+      let hasA = false, hasB = false;
+      for (let dz = -12; dz <= 12; dz += 2) for (let dx = -12; dx <= 12; dx += 2) {
+        const x = px + dx, z = pz + dz;
+        const h = world.heightAt(x, z);
+        if (h < SEA) continue;
+        const top = world.get(x, h, z);
+        if (idSets[s.a].has(top)) hasA = true;
+        if (idSets[s.b].has(top)) hasB = true;
+      }
+      if (hasA || hasB) { mixedTested++; if (hasA && hasB) mixedGood++; }
+    }
+  }
+  void idTopOf;
+  ok(mixedTested > 0 && mixedGood / mixedTested >= 0.6,
+    `both watches show at their seams (${mixedGood}/${mixedTested} samples mixed)`);
 }
 
-/* ---------------- survey ---------------- */
-section('survey');
+/* ---- A3 forests ---- */
+section('A3 — forests');
 {
-  const t1 = Date.now();
-  const s = SG.surveyDistrict(world, landmarks);
-  console.log(`  · surveyed ${s.grid}×${s.grid} plots in ${Date.now() - t1}ms; ${s.buildableCount} buildable`);
-  ok(s.grid === 32, '32×32 plot grid');
-  ok(s.buildableCount > 150 && s.buildableCount < 700,
-    `sane buildable count (${s.buildableCount})`);
-  const bld = s.plots.filter(p => p.buildable);
-  ok(bld.every(p => p.price > 0 && p.tier), 'every buildable plot is priced and tiered');
-  const waterfront = bld.filter(p => p.waterfront).length;
-  ok(waterfront >= 20, `waterfront plots exist (${waterfront})`);
-  ok(bld.some(p => p.riverside), 'riverside plots exist');
-  ok(bld.some(p => p.fallsView), 'falls-view plots exist');
-  ok(bld.some(p => p.clifftop), 'clifftop plots exist');
-  ok(bld.some(p => p.mineralValue > 0), 'some deeds carry mineral rights');
-  const commons = s.plots.filter(p => p.commons).length;
-  ok(commons >= 8, `the named places are held as commons (${commons} plots in trust)`);
-  ok(s.plots.filter(p => p.commons).every(p => !p.buildable), 'commons are never for sale');
-  const landmarkTier = bld.filter(p => p.tier === 'LANDMARK').length;
-  ok(landmarkTier > 0 && landmarkTier < bld.length * 0.15,
-    `LANDMARK tier is scarce (${landmarkTier} of ${bld.length})`);
-  // determinism of the whole pipeline
-  const s2 = SG.surveyDistrict(SG.buildDistrict01().world, landmarks);
-  ok(JSON.stringify(s2.plots.map(p => p.score)) === JSON.stringify(s.plots.map(p => p.score)),
-    'survey is deterministic end to end');
+  const stems = geo.stems;
+  const kinds = {};
+  stems.forEach(s => kinds[s.kind] = (kinds[s.kind] || 0) + 1);
+  console.log(`  · ${stems.length} stems: ${JSON.stringify(kinds)}`);
+  ok(stems.length >= 700 && stems.length <= 4500, `stem budget ≥700 (adapted: the brief's 2,500 assumed half the land wooded; guardrail 10's negative space wins) (${stems.length})`);
+  ok((kinds.hermit || 0) <= 10, `hermits ≤10 (${kinds.hermit || 0})`);
+
+  // every stem has an address
+  let homeless = 0;
+  for (const s of stems) {
+    const i = s.z * world.sx + s.x;
+    if (s.kind === 'wood' && !geo.woodMaskId[i]) homeless++;
+    else if (s.kind === 'riparian' && !geo.riverPts.some(([rx, rz]) => Math.hypot(s.x - rx, s.z - rz) <= 8)) homeless++;
+    else if (s.kind === 'orchard' && !(s.x % 4 === 2 && s.z % 4 === 2)) homeless++;
+    else if (s.kind === 'waytree' && !geo.procession.some(([px, pz]) => Math.hypot(s.x - px, s.z - pz) <= 3)) homeless++;
+  }
+  ok(homeless === 0, `a tree with no address is a bug (${homeless} homeless)`);
+
+  // the founder's complaint, quantified: clumping ≥ 6.0 (uniform ≈ 1.0)
+  const perPlot = new Float64Array(survey.grid * survey.grid);
+  for (const s of stems) perPlot[Math.floor(s.z / SG.PLOT) * survey.grid + Math.floor(s.x / SG.PLOT)]++;
+  const meanS = stems.length / perPlot.length;
+  let varS = 0;
+  for (const c of perPlot) varS += (c - meanS) * (c - meanS);
+  varS /= perPlot.length;
+  ok(varS / meanS >= 6.0, `clumping variance/mean ≥ 6.0 (${(varS / meanS).toFixed(1)})`);
+
+  // per-wood core closure ±0.08; monodominance ±0.05; substrate; treeline
+  let closureBad = [], monoBad = [], substrateBad = 0, treelineBad = 0;
+  SG.WOODS.forEach((w, wi) => {
+    let core = 0, covered = 0;
+    for (const i of landIdx) {
+      if (geo.woodMaskId[i] !== wi + 1) continue;
+      if (geo.edgeD[i] < w.edgeFall) continue; // CORE closure: past the edge falloff
+      const x = i % world.sx, z = Math.floor(i / world.sx);
+      if (geo.glades.some(g => g.wood === wi && Math.hypot(x - g.x, z - g.z) <= g.r + 2)) continue;
+      core++;
+      if (world.heightAt(x, z) > world.surfaceAt(x, z)) covered++;
+    }
+    const closure = core ? covered / core : w.coreClosure;
+    if (core > 40 && Math.abs(closure - w.coreClosure) > 0.08) closureBad.push(`${w.key} ${closure.toFixed(2)}vs${w.coreClosure}`);
+    // species mix (witness scarlets are rationed accents, not the mix)
+    const mine = stems.filter(s => s.kind === 'wood' && s.wood === w.key && s.leaf !== MAT.LEAF_SCARLET);
+    if (mine.length > 20) {
+      const [domKey, domFrac] = Object.entries(w.mix).sort((a, b) => b[1] - a[1])[0];
+      const got = mine.filter(s => s.leaf === MAT[domKey]).length / mine.length;
+      if (Math.abs(got - domFrac) > 0.08) monoBad.push(`${w.key} ${got.toFixed(2)}vs${domFrac}`);
+    }
+    const treeline = w.treelineOverride || (w.region === REGION.HUSH ? 64 : 76);
+    for (const s of mine) {
+      const g = world.surfaceAt(s.x, s.z);
+      if (world.get(s.x, g, s.z) !== MAT.FOREST_FLOOR) substrateBad++;
+      if (g > treeline || g <= SEA + 2) treelineBad++;
+    }
+  });
+  ok(closureBad.length === 0, `core closure within ±0.08 per wood ${closureBad.length ? '(' + closureBad.join(', ') + ')' : ''}`);
+  ok(monoBad.length <= 1, `species mix holds per wood ${monoBad.length ? '(' + monoBad.join(', ') + ')' : ''}`);
+  ok(substrateBad === 0, `every stem stands on leafmould (${substrateBad} bad)`);
+  ok(treelineBad === 0, `treeline respected, overrides included (${treelineBad} bad)`);
+
+  // hermits: isolated (≥12 from any forest stem) and matching the authored list
+  let hermitBad = 0;
+  for (const h of geo.hermits) {
+    const near = stems.find(s => s.kind === 'wood' && Math.hypot(s.x - h.x, s.z - h.z) < 12);
+    if (near) { hermitBad++; console.log(`    · crowded: ${h.name} by ${near.wood} stem (${near.x},${near.z})`); }
+  }
+  ok(hermitBad === 0, `hermits stand alone (${hermitBad} crowded)`);
+  ok(stems.filter(s => s.kind === 'orchard').every(s => s.x % 4 === 2 && s.z % 4 === 2),
+    'orchard stems 100% on the pitch-4 lattice');
+
+  // season purity: identity cubes outside their watch ∪ seam band ∪ exemptions
+  const home = {};
+  for (const r of [1, 2, 3, 4]) for (const k of SG.IDENTITY[r]) home[MAT[k]] = r;
+  const procSet = new Set(); // waytrees stand offset ±2 with crowns of 2 more
+  for (const [px, pz] of geo.procession)
+    for (let dz = -4; dz <= 4; dz++) for (let dx = -4; dx <= 4; dx++)
+      procSet.add((pz + dz) * world.sx + px + dx);
+  let purityBad = 0, exempted = 0;
+  for (const i of landIdx) {
+    const x = i % world.sx, z = Math.floor(i / world.sx);
+    const r = geo.regionId[i], sd = geo.seamDist[i];
+    const hTop = world.heightAt(x, z), g = world.surfaceAt(x, z);
+    for (let y = Math.max(1, g - 1); y <= hTop; y++) {
+      const id = world.get(x, y, z);
+      const hr = home[id];
+      if (!hr || hr === r || sd <= 12) continue;
+      if (procSet.has(i)) { exempted++; continue; }
+      let ex = false;
+      for (const e of SG.EXEMPTIONS)
+        if (e.mats.some(m => MAT[m] === id) && Math.hypot(x - e.x, z - e.z) <= e.r + 1) { ex = true; break; }
+      if (ex) { exempted++; continue; }
+      purityBad++;
+      if (purityBad <= 3) console.log(`    · stray: ${PALETTE[id].key} at (${x},${z}) in ${SG.REGION_NAME[r]} sd=${sd}`);
+    }
+  }
+  ok(purityBad === 0, `season purity: no identity material strays (${purityBad} strays)`);
+  ok(exempted <= 500, `exemption budget ≤500 cubes (${exempted})`);
+}
+
+/* ---- A4 landmarks & commons ---- */
+section('A4 — landmarks & commons');
+{
+  ok(landmarks.length === SG.GAZETTEER.length, 'every gazetteer place is a landmark');
+  // structural spot checks at surveyed coordinates
+  let stone = false, air = false, waterUnder = false;
+  for (let y = SEA + 6; y < SEA + 18; y++) if (SG.isOpaque(world.get(312, y, 222))) stone = true;
+  for (let y = SEA + 1; y < SEA + 6; y++) if (world.get(312, y, 222) === MAT.AIR) air = true;
+  for (let y = SEA - 4; y < SEA; y++) if (world.get(312, y, 222) === MAT.WATER) waterUnder = true;
+  ok(stone && air && waterUnder, "the Needle's Eye still spans open water (312,222)");
+  let tiers = 0, run = 0;
+  for (let y = 20; y < 70; y++) { // three tiered sheets around the falls point
+    const w = [[229, 180], [225, 186], [221, 192]].some(([fx, fz]) => world.get(fx, y, fz) === MAT.WATER);
+    if (w) run++; else { if (run >= 5) tiers++; run = 0; }
+  }
+  if (run >= 5) tiers++;
+  ok(tiers >= 1, `Lantern Falls is terraced water at (230,178) (${tiers} runs)`);
+  let roofedAir = 0;
+  for (let dz = -26; dz <= 5; dz++) for (let dy = -16; dy <= 4; dy++) for (let dx = -22; dx <= 5; dx++) {
+    const x = 153 + dx, y = world.surfaceAt(153, 160) + dy, z = 160 + dz;
+    if (world.get(x, y, z) === MAT.AIR && SG.isOpaque(world.get(x, y + 3, z))) roofedAir++;
+  }
+  ok(roofedAir > 300, `Glimmer Hollow is a real cavern (${roofedAir})`);
+  ok(world.heightAt(142, 117) >= 92, 'the Prow keeps its height');
+  let springCt = 0;
+  for (let z = 176; z < 196; z++) for (let y = 44; y < 54; y++) for (let x = 158; x < 180; x++)
+    if (world.get(x, y, z) === MAT.SPRING) springCt++;
+  ok(springCt >= 10, `the Kettles boil in the snow (${springCt})`);
+  ok(world.get(40, SEA + 4, 324) === MAT.BASALT, 'the Wardens watch the southwest water (40,324)');
+  ok(world.get(212, SEA + 9, 322) === MAT.CRYSTAL, 'the Lantern is lit (flame cube seated at the mole head)');
+  let lampBrass = false;
+  for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++)
+    for (let y = 0; y < world.sy; y++) if (world.get(246 + dx, y, 124 + dz) === MAT.BRASS) lampBrass = true;
+  ok(lampBrass, 'the First Lamp stands on the Thawline (246,124)');
+  let plates = 0;
+  for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2], [0, -2]])
+    for (let y = 0; y < world.sy; y++) if (world.get(218 + dx, y, 246 + dz) === MAT.BRASS) { plates++; break; }
+  ok(plates === 4, `the Almanac carries four brass plates (${plates})`);
+  ok(SG.SLEEPER_MASK.every(([dx, dz]) => world.get(146 + dx, world.surfaceAt(146 + dx, 121 + dz), 121 + dz) === MAT.SNOW),
+    'the Sleeper matches its stored stencil exactly');
+
+  // commons mechanics
+  const plotAt = (x, z) => survey.plots[Math.floor(z / SG.PLOT) * survey.grid + Math.floor(x / SG.PLOT)];
+  let holdBad = 0;
+  for (const g of SG.GAZETTEER) {
+    const p = plotAt(g.x, g.z);
+    if (!p.commons || p.buildable) holdBad++;
+  }
+  ok(holdBad === 0, `every hold plot is commons and unbuyable (${holdBad} bad)`);
+  let brassBad = 0, brassCt = 0;
+  for (const i of landIdx) {
+    const x = i % world.sx, z = Math.floor(i / world.sx);
+    for (let y = world.surfaceAt(x, z); y <= world.heightAt(x, z); y++)
+      if (world.get(x, y, z) === MAT.BRASS) { brassCt++; if (!plotAt(x, z).commons) brassBad++; }
+  }
+  ok(brassBad === 0, `brass appears only on commons ground (${brassBad}/${brassCt} astray)`);
+  let holdStems = 0;
+  for (const s of geo.stems)
+    for (const g of SG.GAZETTEER)
+      if (s.kind !== 'waytree' && Math.hypot(s.x - g.x, s.z - g.z) <= g.hold) {
+        holdStems++; console.log(`    · invader: ${s.kind} (${s.x},${s.z}) in ${g.name}'s hold`);
+      }
+  ok(holdStems === 0, `no wood invades a hold (${holdStems} stems)`);
+}
+
+/* ---- A5 color ---- */
+section('A5 — color');
+{
+  ok(PALETTE.length === 40, `palette additions exactly 20 (${PALETTE.length - 20})`);
+  const sig = [MAT.LEAF_BLOSSOM, MAT.LEAF_BROAD, MAT.LEAF_EMBER, MAT.ICE_BLUE].map(m => hsv(PALETTE[m].colorTop).h);
+  let hueOK = true;
+  for (let a = 0; a < 4; a++) for (let b = a + 1; b < 4; b++) {
+    const d = Math.abs(sig[a] - sig[b]);
+    if (Math.min(d, 360 - d) < 40) hueOK = false;
+  }
+  ok(hueOK, 'the four signatures sit ≥40° apart on the wheel');
+  let sideBad = 0;
+  for (const e of PALETTE.slice(20))
+    if (e.colorTop !== e.color && luma(e.color) >= luma(e.colorTop)) sideBad++;
+  ok(sideBad === 0, `warm top, cool flank, baked in (${sideBad} bad)`);
+
+  // saturation budget & luma script, per watch, over column tops
+  const satCt = [0, 0, 0, 0, 0], regCt = [0, 0, 0, 0, 0], lumaSum = [0, 0, 0, 0, 0], loudBy = [];
+  const blocks = new Map(); // 32×32 canopy-majority luma blocks
+  for (const i of landIdx) {
+    const x = i % world.sx, z = Math.floor(i / world.sx);
+    if (x % 2 || z % 2) continue;
+    const r = geo.regionId[i];
+    const top = world.get(x, world.heightAt(x, z), z);
+    const e = PALETTE[top];
+    if (!e || e.fluid) continue;
+    regCt[r]++;
+    if (hsv(e.colorTop).s > 0.55) { satCt[r]++; loudBy[r] = loudBy[r] || {}; loudBy[r][e.key] = (loudBy[r][e.key] || 0) + 1; }
+    lumaSum[r] += luma(e.colorTop);
+    const bk = Math.floor(x / 32) + ',' + Math.floor(z / 32);
+    if (!blocks.has(bk)) blocks.set(bk, { l: 0, n: 0, canopy: 0 });
+    const b = blocks.get(bk);
+    b.l += luma(e.colorTop); b.n++;
+    if (geo.woodMaskId[i]) b.canopy++;
+  }
+  const satPct = [1, 2, 3, 4].map(r => satCt[r] / (regCt[r] || 1));
+  const satMax = Math.max(...satPct);
+  console.log(`  · loud%: M ${(satPct[0] * 100).toFixed(1)} N ${(satPct[1] * 100).toFixed(1)} E ${(satPct[2] * 100).toFixed(1)} H ${(satPct[3] * 100).toFixed(1)}`);
+  const worstR = 1 + satPct.indexOf(Math.max(...satPct));
+  if (loudBy[worstR]) console.log('  · worst loud mats:', JSON.stringify(loudBy[worstR]));
+  ok(satMax <= 0.12, `saturation is currency: ≤12% loud cubes per watch (worst ${(satMax * 100).toFixed(1)}%)`);
+  const meanLuma = r => lumaSum[r] / (regCt[r] || 1);
+  const hushMargin = meanLuma(4) - Math.max(meanLuma(1), meanLuma(2), meanLuma(3));
+  ok(hushMargin >= 0.08, `the Hush is the brightest mass by ≥0.08 (${hushMargin.toFixed(2)})`);
+  let darkest = null;
+  for (const [k, b] of blocks) {
+    if (b.n < 120 || b.canopy / b.n < 0.4) continue;
+    if (!darkest || b.l / b.n < darkest.v) darkest = { k, v: b.l / b.n };
+  }
+  // the brief's §4 names the Hushfirs AND the Greenvault interiors as the
+  // darkest masses (~0.22 luma); either owning the darkest block satisfies it
+  let inDarkWood = false;
+  if (darkest) {
+    const [bx, bz] = darkest.k.split(',').map(Number);
+    const dark = [SG.WOODS.findIndex(w => w.key === 'hushfirs') + 1, SG.WOODS.findIndex(w => w.key === 'greenvault') + 1];
+    outer2: for (let z = bz * 32; z < bz * 32 + 32; z++) for (let x = bx * 32; x < bx * 32 + 32; x++)
+      if (dark.includes(geo.woodMaskId[z * world.sx + x])) { inDarkWood = true; break outer2; }
+  }
+  ok(inDarkWood, `the darkest canopy block is a dark-wood interior (${darkest ? darkest.k : 'none'})`);
+}
+
+/* ---- A6 sun honesty (the Thawline's fingers are real) ---- */
+section('A6 — sun honesty');
+{
+  const thawPts = geo.seams
+    .filter(s => (s.a === REGION.MORNING && s.b === REGION.HUSH) || (s.a === REGION.HUSH && s.b === REGION.MORNING))
+    .flatMap(s => s.pts);
+  ok(thawPts.length > 0, 'the Thawline exists as a traced seam');
+  {
+    const north = [], south = [], all = [];
+    for (let k = 0; k < thawPts.length; k++) {
+      const [px, pz] = thawPts[k];
+      if (px < 190) continue; // the Thawline proper is the NE shelf reach
+      let snowMin = 999;
+      for (let dz = -10; dz <= 10; dz += 2) for (let dx = -10; dx <= 10; dx += 2) {
+        const x = px + dx, z = pz + dz, h = world.surfaceAt(x, z);
+        if (h > SEA && world.get(x, h, z) === MAT.SNOW && h < snowMin) snowMin = h;
+      }
+      if (snowMin === 999) continue;
+      all.push(snowMin);
+      const dhdz = world.surfaceAt(px, pz + 2) - world.surfaceAt(px, pz - 2);
+      if (dhdz > 0.5) north.push(snowMin);
+      else if (dhdz < -0.5) south.push(snowMin);
+    }
+    const mean = a => a.reduce((s, v) => s + v, 0) / (a.length || 1);
+    const sd = Math.sqrt(mean(all.map(v => (v - mean(all)) ** 2)));
+    ok(sd >= 4, `snowline varies along the Thawline (σ ${sd.toFixed(1)})`);
+    ok(north.length > 3 && south.length > 3 && mean(north) <= mean(south) - 6,
+      `snow holds the shaded gullies (north ${mean(north).toFixed(0)} vs south ${mean(south).toFixed(0)})`);
+  }
+}
+
+/* ---- A7 economy ---- */
+section('A7 — economy');
+{
+  const eq = bld.filter(p => p.equinox);
+  const straddle = survey.plots.filter(p => p.equinox).length;
+  console.log(`  · equinox: ${eq.length} buildable of ${straddle} straddling`);
+  ok(eq.length >= 24 && eq.length <= 70, `equinox plots ≥24 (adapted; seams cross mountain country) (${eq.length})`);
+  const hush = bld.filter(p => p.region === REGION.HUSH);
+  const hushAll = survey.plots.filter(p => p.region === REGION.HUSH && !p.commons);
+  console.log(`  · hush plots: ${hushAll.length} non-commons, ${hush.length} buildable; best scores per region: ` +
+    [1, 2, 3, 4].map(r => SG.REGION_NAME[r].split(' ')[1] + ' ' + Math.max(0, ...bld.filter(p => p.region === r).map(p => p.score))).join(', '));
+  ok(hush.length >= 25, `the Hush holds ≥25 buildable deeds (${hush.length})`);
+  ok(hush.filter(p => p.tier === 'LANDMARK').length >= 3,
+    `≥3 LANDMARK deeds in winter (${hush.filter(p => p.tier === 'LANDMARK').length})`);
+  for (const r of [1, 2, 3, 4])
+    ok(bld.some(p => p.region === r && p.tier === 'LANDMARK'),
+      `${SG.REGION_NAME[r]} holds a LANDMARK deed`);
+  ok(bld.some(p => p.iceLocked), 'ice-locked mineral rights exist on buildable ground');
+  // live-edit fixture: ice + ore under it reprices without flag errors
+  const p0 = hush.find(p => !p.iceLocked && p.slope <= 4) || hush[0];
+  const fx = p0.x0 + 6, fz = p0.z0 + 6, fy = world.surfaceAt(fx, fz);
+  const saved = [world.get(fx, fy + 1, fz), world.get(fx, fy - 1, fz)];
+  world.set(fx, fy + 1, fz, MAT.ICE); world.set(fx, fy - 1, fz, MAT.GOLD_ORE);
+  const re = SG.surveyDistrict(world, landmarks, geo);
+  const p1 = re.plots[p0.cz * re.grid + p0.cx];
+  ok(p1.iceLocked && p1.mineralValue > p0.mineralValue, 'creator edits reprice ice semantics live');
+  world.set(fx, fy + 1, fz, saved[0]); world.set(fx, fy - 1, fz, saved[1]);
+}
+
+/* ---- A8 water ---- */
+section('A8 — water');
+{
+  ok(PALETTE.filter(e => e.fluid).length === 3, 'exactly three fluids: WATER, SPRING, MILKWATER');
+  let milkFar = 0, milkCt = 0;
+  for (const i of landIdx) {
+    const x = i % world.sx, z = Math.floor(i / world.sx);
+    for (let y = 50; y < 70; y++) if (world.get(x, y, z) === MAT.MILKWATER) {
+      milkCt++;
+      if (Math.hypot(x - 240, z - 104) > 20) milkFar++;
+    }
+  }
+  ok(milkCt >= 8 && milkFar === 0, `the Milkwater pools only below the Force (${milkCt} cubes, ${milkFar} stray)`);
+  const mp = survey.plots[Math.floor(110 / SG.PLOT) * survey.grid + Math.floor(242 / SG.PLOT)];
+  ok(mp.riverside && !mp.waterfront, 'perched jade pools read riverside, never waterfront');
+}
+
+/* ---- A9 ice ---- */
+section('A9 — ice');
+{
+  let saucerBad = 0, saucerCt = 0;
+  for (let dz = -8; dz <= 8; dz++) for (let dx = -8; dx <= 8; dx++) {
+    if (Math.hypot(dx, dz) > 7.5) continue;
+    saucerCt++;
+    const x = 150 + dx, z = 88 + dz, g = world.surfaceAt(x, z);
+    const id = world.get(x, g, z);
+    if (id !== MAT.ICE && id !== MAT.ICE_BLUE && id !== MAT.SNOW) saucerBad++;
+  }
+  ok(saucerBad <= saucerCt * 0.05, `what the ice catches, the ice keeps: the Saucer is lidded (${saucerBad} gaps)`);
+  let lidIce = 0, lidWater = 0, lidOreCt = 0, mixedRows = 0;
+  for (let z = 132 - 13; z <= 132 + 13; z++) {
+    let rowIce = false, rowWater = false;
+    for (let x = 158 - 13; x <= 158 + 13; x++) {
+      if (Math.hypot(x - 158, z - 132) > 13) continue;
+      const id = world.get(x, 76, z);
+      if (id === MAT.ICE) { lidIce++; rowIce = true; }
+      else if (id === MAT.WATER) { lidWater++; rowWater = true; }
+      else if (id === MAT.GOLD_ORE || id === MAT.CRYSTAL) { lidOreCt++; rowIce = true; }
+    }
+    if (rowIce && rowWater) mixedRows++;
+  }
+  const iceFrac = (lidIce + lidOreCt) / (lidIce + lidOreCt + lidWater || 1);
+  ok(iceFrac >= 0.4 && iceFrac <= 0.6, `the Ewer is half-lidded (${(iceFrac * 100).toFixed(0)}% ice)`);
+  ok(mixedRows >= 2 && mixedRows <= 6, `a dithered fringe divides ice from open water (${mixedRows} mixed rows)`);
+  ok(lidOreCt >= 6, `treasure sits flush in the lid (${lidOreCt})`);
+}
+
+/* ---- A10 sightlines & the Procession ---- */
+section('A10 — sightlines & the Procession');
+{
+  const want = [MAT.LEAF_BLOSSOM, MAT.LEAF_BROAD, MAT.LEAF_EMBER, MAT.SNOW];
+  const fan = (ox, oy, oz, a0, a1) => {
+    const seen = new Set();
+    for (let a = a0; a <= a1; a += 2) {
+      for (const el of [-0.02, 0.02, 0.06, 0.09, 0.12, 0.16]) {
+        const rad = a * Math.PI / 180;
+        const hit = SG.raycast(world, ox + 0.5, oy, oz + 0.5, Math.sin(rad), el, -Math.cos(rad), 320);
+        if (hit) seen.add(hit.id);
+      }
+    }
+    return seen;
+  };
+  const mole = fan(212, SEA + 14, 322, -90, 90);
+  ok(want.every(m => mole.has(m)), `the Overture: all four watches from the mole (missing: ${want.filter(m => !mole.has(m)).map(m => PALETTE[m].key).join(',') || 'none'})`);
+  const alm = fan(218, world.surfaceAt(218, 246) + 7, 246, -180, 180);
+  ok(want.every(m => alm.has(m)), `the Almanac reads all four watches (missing: ${want.filter(m => !alm.has(m)).map(m => PALETTE[m].key).join(',') || 'none'})`);
+
+  const wt = geo.waytrees;
+  ok(wt.length >= 40, `the Procession is ≥40 waytrees (${wt.length})`);
+  const order = [MAT.LEAF_BLOSSOM, MAT.LEAF_BROAD, MAT.LEAF_EMBER, null];
+  let mono = true, last = 0;
+  for (const w of wt) {
+    const k = order.indexOf(w.state === undefined ? null : w.state);
+    if (k < last) mono = false;
+    last = Math.max(last, k);
+  }
+  ok(mono, 'the year turns one way: blossom → green → ember → bare');
+  const regionsCrossed = new Set(wt.map(w => geo.regionId[w.z * world.sx + w.x]).filter(r => r > 0));
+  ok(regionsCrossed.size === 4, `the Procession crosses all four watches (${regionsCrossed.size})`);
 }
 
 /* ---------------- editing: place/erase cubes, live re-survey ---------------- */

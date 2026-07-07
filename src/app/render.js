@@ -174,7 +174,9 @@ function makeLabel(text) {
 }
 
 R.addLandmarks = function (landmarks, world) {
-  landmarks.forEach((lm, i) => {
+  // only the gazetteer's labelled places get a sprite — survey points
+  // (fords, seeps, waymarks) are named on the deed card, not in the sky
+  landmarks.filter(lm => lm.label).forEach((lm, i) => {
     const { tex, aspect } = makeLabel(lm.name);
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({
       map: tex, transparent: true, depthTest: false,
