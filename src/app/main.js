@@ -38,6 +38,74 @@ function denyEdit(why) {
 // where may the cursor act? (undo and boot replay pass silent and skip this)
 const mayEdit = (x, y, z) => steward ? { ok: y !== 0 } : SG.canEdit(survey, claims, x, y, z);
 
+/* ---------- walk mode: the district on foot ----------
+   Physics lives in src/core/walker.js (pure, headless-tested); this layer
+   only feeds it keys and mouse-look, and pins the camera to its eyes. */
+let walkMode = false, walker = null, yaw = 0, pitch = 0, orbitSave = null;
+const keys = new Set();
+function walkInput() {
+  const fwd = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+  const str = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+  const sp = keys.has('shift') ? 9 : 5.5;
+  let vx = -Math.sin(yaw) * fwd + Math.cos(yaw) * str;
+  let vz = -Math.cos(yaw) * fwd - Math.sin(yaw) * str;
+  const m = Math.hypot(vx, vz);
+  if (m > 0) { vx = vx / m * sp; vz = vz / m * sp; }
+  return { vx, vz, jump: keys.has(' ') };
+}
+function walkSpawn() { // stand on your parcel if one is selected, else where you were looking
+  if (selectedIdx >= 0 && plots[selectedIdx]) {
+    const p = plots[selectedIdx];
+    return [p.x0 + SG.PLOT / 2, p.z0 + SG.PLOT / 2];
+  }
+  const hit = ddaFromScreen(innerWidth / 2, innerHeight / 2, true);
+  if (hit && hit.x > 2 && hit.x < world.sx - 2) return [hit.x + 0.5, hit.z + 0.5];
+  return [212.5, 316.5]; // the harbor mole — where the Overture begins
+}
+function surveyAtCrosshair() {
+  const dir = new THREE.Vector3();
+  R.camera.getWorldDirection(dir);
+  const o = R.camera.position;
+  const hit = SG.raycast(world, o.x + world.sx / 2, o.y, o.z + world.sz / 2, dir.x, dir.y, dir.z, 400);
+  if (!hit) return;
+  const cx = Math.floor(hit.x / SG.PLOT), cz = Math.floor(hit.z / SG.PLOT);
+  if (cx < 0 || cx >= survey.grid || cz < 0 || cz >= survey.grid) return;
+  selectedIdx = cz * survey.grid + cx;
+  R.drapeTo(R.selectMesh, world, plots[selectedIdx],
+    claims.has(selectedIdx) ? 0x8fae63 : plots[selectedIdx].buildable ? 0xd9a441 : 0xc4685a);
+  showCard(selectedIdx);
+}
+function setWalkMode(on) {
+  if (on === walkMode) return;
+  if (on) {
+    if (buildMode) setBuildMode(false);
+    const [sx, sz] = walkSpawn();
+    walker = SG.createWalker(world, sx, sz);
+    yaw = theta; pitch = -0.06;
+    orbitSave = { theta, phi, radius, target: target.clone() };
+    walkMode = true;
+    $('walkBtn').classList.add('active');
+    $('crosshair').classList.remove('hidden');
+    $('card').classList.add('hidden');
+    R.hoverMesh.visible = false; R.ghost.visible = false;
+    $('hints').innerHTML = HINT_WALK;
+    R.camera.rotation.order = 'YXZ';
+    R.camera.fov = 68; R.camera.updateProjectionMatrix();
+    R.renderer.domElement.requestPointerLock?.();
+    toast('On foot — WASD · space · shift; click surveys the land ahead');
+  } else {
+    walkMode = false; walker = null;
+    document.exitPointerLock?.();
+    $('walkBtn').classList.remove('active');
+    $('crosshair').classList.add('hidden');
+    if (orbitSave) { theta = orbitSave.theta; phi = orbitSave.phi; radius = orbitSave.radius; target.copy(orbitSave.target); }
+    R.camera.fov = 50; R.camera.updateProjectionMatrix();
+    $('hints').innerHTML = HINT_SURVEY;
+    if (selectedIdx >= 0) showCard(selectedIdx);
+    toast('Back to the survey glass');
+  }
+}
+
 function beginBatch() { currentBatch = []; }
 function endBatch() {
   if (currentBatch && currentBatch.length) {
@@ -132,6 +200,11 @@ function pan(dx, dy) {
 }
 function onDown(e) {
   interacted = true;
+  if (walkMode) {
+    if (!document.pointerLockElement) R.renderer.domElement.requestPointerLock?.();
+    else if (e.button === 0) surveyAtCrosshair();
+    return;
+  }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, button: e.button });
   if (pointers.size === 1) { downPos = { x: e.clientX, y: e.clientY }; downTime = Date.now(); }
   if (pointers.size === 2) {
@@ -142,6 +215,13 @@ function onDown(e) {
 }
 const lastNDC = new THREE.Vector2(); let needRay = false;
 function onMove(e) {
+  if (walkMode) {
+    if (document.pointerLockElement) {
+      yaw -= e.movementX * 0.0023;
+      pitch = THREE.MathUtils.clamp(pitch - e.movementY * 0.0021, -1.45, 1.45);
+    }
+    return;
+  }
   lastNDC.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   needRay = true;
   if (!pointers.has(e.pointerId)) return;
@@ -162,6 +242,7 @@ function onMove(e) {
   }
 }
 function onUp(e) {
+  if (walkMode) return;
   const wasSingle = pointers.size === 1;
   pointers.delete(e.pointerId);
   endBatch(); // closes a paint stroke; harmless otherwise
@@ -422,8 +503,10 @@ function buildTileset() {
 const HINT_SURVEY = 'drag&nbsp;·&nbsp;orbit&emsp;scroll&nbsp;·&nbsp;zoom&emsp;right-drag / two-finger&nbsp;·&nbsp;pan<br>tap a parcel to survey it&nbsp;·&nbsp;the named places are held in trust';
 const HINT_BUILD = 'drag&nbsp;·&nbsp;paint&emsp;alt-drag&nbsp;·&nbsp;orbit&emsp;right-click&nbsp;·&nbsp;erase&emsp;alt-click&nbsp;·&nbsp;sample&emsp;ctrl+Z&nbsp;·&nbsp;undo<br>you shape only the parcels you hold (green)&nbsp;·&nbsp;✪ steward lifts the law&nbsp;·&nbsp;edits re-survey live';
 const HINT_STEWARD = 'drag&nbsp;·&nbsp;paint&emsp;alt-drag&nbsp;·&nbsp;orbit&emsp;right-click&nbsp;·&nbsp;erase&emsp;alt-click&nbsp;·&nbsp;sample&emsp;ctrl+Z&nbsp;·&nbsp;undo<br>✪ steward&nbsp;·&nbsp;the whole district is yours to sculpt&emsp;edits re-survey live';
+const HINT_WALK = 'WASD&nbsp;·&nbsp;walk&emsp;space&nbsp;·&nbsp;jump&emsp;shift&nbsp;·&nbsp;stride&emsp;mouse&nbsp;·&nbsp;look&emsp;click&nbsp;·&nbsp;survey the land ahead<br>Esc&nbsp;·&nbsp;release the mouse&emsp;Esc again (or ⚇)&nbsp;·&nbsp;back to the survey glass';
 
 function setBuildMode(on) {
+  if (on && walkMode) setWalkMode(false); // one pair of feet, one pair of hands
   buildMode = on;
   boxCorner = null;
   $('buildBtn').classList.toggle('active', on);
@@ -497,17 +580,34 @@ function boot() {
     }
     updateHUD();
     R.updateSun($('sunSlider').value / 100);
-    SG.app = { world, landmarks, geo, survey, plots, claims, applyEdit, setBuildMode, setSteward, claim }; // for tooling & tests
+    SG.app = { // for tooling & tests
+      world, landmarks, geo, survey, plots, claims,
+      applyEdit, setBuildMode, setSteward, setWalkMode, claim, surveyAtCrosshair,
+      get walker() { return walker; },
+      setWalkLook: (y, p) => { yaw = y; pitch = p; },
+    };
     console.log('district raised in', Math.round(performance.now() - t0), 'ms');
     requestAnimationFrame(() => requestAnimationFrame(() => $('loader').classList.add('off')));
   }, 80);
 
   const clock = new THREE.Clock();
+  let lastT = 0;
   (function animate() {
     requestAnimationFrame(animate);
-    if (!interacted) theta += 0.0006;
-    if (world) { R.flushDirty(world); updateHover(); R.tick(clock.getElapsedTime(), radius); }
-    updateCamera();
+    const elapsed = clock.getElapsedTime();
+    const dt = Math.min(elapsed - lastT, 0.1);
+    lastT = elapsed;
+    if (!interacted && !walkMode) theta += 0.0006;
+    if (world) {
+      R.flushDirty(world);
+      if (!walkMode) updateHover();
+      R.tick(elapsed, walkMode ? 140 : radius);
+    }
+    if (walkMode && walker) {
+      walker.step(dt, walkInput());
+      R.camera.position.set(walker.x - world.sx / 2, walker.y + walker.EYE, walker.z - world.sz / 2);
+      R.camera.rotation.set(pitch, yaw, 0);
+    } else updateCamera();
     R.renderer.render(R.scene, R.camera);
   })();
 
@@ -518,6 +618,8 @@ function boot() {
     toast('Simulated purchase — $9.99 pack → 1,000 ◆');
   });
   $('buildBtn').addEventListener('click', () => setBuildMode(!buildMode));
+  $('walkBtn').addEventListener('click', () => setWalkMode(!walkMode));
+  if (R.IS_TOUCH) $('walkBtn').style.display = 'none'; // needs a keyboard, for now
   $('stewardBtn').addEventListener('click', () => setSteward(!steward));
   $('undoBtn').addEventListener('click', undoEdit);
   $('revertBtn').addEventListener('click', () => {
@@ -528,9 +630,18 @@ function boot() {
   });
   addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT') return;
+    keys.add(e.key.toLowerCase());
+    if (walkMode) {
+      if (e.key === ' ') e.preventDefault();
+      if (e.key === 'Escape' && !document.pointerLockElement) setWalkMode(false);
+      if (e.key === 'b' || e.key === 'B') { setWalkMode(false); setBuildMode(true); }
+      return;
+    }
     if (e.key === 'b' || e.key === 'B') setBuildMode(!buildMode);
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undoEdit(); }
   });
+  addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+  addEventListener('blur', () => keys.clear());
   addEventListener('contextmenu', e => e.preventDefault());
   document.body.addEventListener('pointerdown', e => {
     if (e.target === R.renderer.domElement) onDown(e);
@@ -539,6 +650,7 @@ function boot() {
   document.body.addEventListener('pointerup', onUp);
   document.body.addEventListener('pointercancel', onUp);
   addEventListener('wheel', e => {
+    if (walkMode) return;
     interacted = true;
     radius = THREE.MathUtils.clamp(radius * (1 + e.deltaY * 0.0011), 54, 810);
   }, { passive: true });

@@ -74,11 +74,16 @@
   #ownedTag{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--good);
     border:1px solid var(--good);padding:8px 14px;border-radius:2px}
 
-  #buildBtn{background:var(--panel);border:1px solid var(--line);color:var(--ink);
+  #buildBtn,#walkBtn{background:var(--panel);border:1px solid var(--line);color:var(--ink);
     font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;padding:8px 13px;
     border-radius:2px;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
-  #buildBtn:hover{border-color:var(--brass)}
-  #buildBtn.active{background:var(--brass);color:#141009;border-color:var(--brass);font-weight:500}
+  #buildBtn:hover,#walkBtn:hover{border-color:var(--brass)}
+  #buildBtn.active,#walkBtn.active{background:var(--brass);color:#141009;border-color:var(--brass);font-weight:500}
+
+  #crosshair{top:50%;left:50%;transform:translate(-50%,-50%);width:5px;height:5px;
+    border-radius:50%;background:rgba(236,229,211,.92);pointer-events:none;
+    box-shadow:0 0 0 2px rgba(10,17,22,.4), 0 0 8px rgba(236,229,211,.35)}
+  #crosshair.hidden{display:none}
 
   #tileset{left:50%;bottom:18px;transform:translateX(-50%);width:min(640px,calc(100vw - 24px));
     background:var(--panel);border:1px solid var(--line);border-top:2px solid var(--brass);
@@ -135,6 +140,7 @@
   <div id="tr">
     <div class="pill"><span class="lbl">Settled</span><span id="occTxt">0 / 0</span></div>
     <div class="pill"><span class="lbl">Gems</span><span id="walletVal">0 ◆</span><button id="topUp" title="Simulated gem purchase">+</button></div>
+    <button id="walkBtn" title="Walk the district on foot — first person">⚇ WALK</button>
     <button id="buildBtn" title="Creator mode — sculpt the district (B)">⚒ BUILD</button>
   </div>
 </div>
@@ -186,6 +192,7 @@
 </div>
 
 <div id="toast" class="hud"></div>
+<div id="crosshair" class="hud hidden"></div>
 
 <script src="vendor/three.min.js"></script>
 <script src="src/core/palette.js"></script>
@@ -197,6 +204,7 @@
 <script src="src/core/genesis.js"></script>
 <script src="src/core/survey.js"></script>
 <script src="src/core/tenure.js"></script>
+<script src="src/core/walker.js"></script>
 <script src="src/app/render.js"></script>
 <script src="src/app/main.js"></script>
 </body>

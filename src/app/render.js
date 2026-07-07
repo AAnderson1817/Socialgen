@@ -25,7 +25,7 @@ R.init = function () {
   renderer.setSize(innerWidth, innerHeight);
   if (SHADOWS) { renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; }
   document.body.appendChild(renderer.domElement);
-  camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 3400);
+  camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.35, 3400); // near < the walker's shoulder width
   hemi = new THREE.HemisphereLight(0xbfd6e4, 0x40503e, 0.8);
   scene.add(hemi);
   sun = new THREE.DirectionalLight(0xfff3dd, 1.05);

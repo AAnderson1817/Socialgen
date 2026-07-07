@@ -9,6 +9,7 @@ import '../src/core/genesis.js';
 import '../src/core/flora.js';
 import '../src/core/survey.js';
 import '../src/core/tenure.js';
+import '../src/core/walker.js';
 
 const SG = globalThis.SG;
 const { MAT, PALETTE, World, SEA, REGION } = SG;
@@ -654,6 +655,59 @@ section('tenure');
     [`${mine.x0 + SG.PLOT},30,${mz}`, 1], ['0,30,0', 1],        // off it
   ]);
   ok(SG.improvements(edits, mine) === 2, 'the ledger counts only cubes on the deed');
+}
+
+/* ---------------- the walker: cubes carry your weight ---------------- */
+section('walker');
+{
+  // flat proving ground with one lane per hazard
+  const w = new World(48, 40, 48);
+  w.fill(0, 0, 0, 47, 0, 47, MAT.BEDROCK);
+  w.fill(0, 1, 0, 47, SEA, 47, MAT.STONE);
+  w.fill(0, SEA + 1, 0, 47, SEA + 1, 47, MAT.GRASS);
+  const G = SEA + 2 + 0.01; // feet height when standing on the grass (28.01)
+  const run = (wk, secs, input) => { for (let t = 0; t < secs * 60; t++) wk.step(1 / 60, input); return wk; };
+
+  // settle: gravity holds you to the ground you spawned on
+  const still = run(SG.createWalker(w, 10.5, 5.5), 0.5, {});
+  ok(still.onGround && Math.abs(still.y - G) < 0.05, 'the walker settles on the surface');
+
+  // lane z=10: a terrace one cube high auto-steps, no jump key needed
+  w.fill(26, SEA + 2, 8, 47, SEA + 2, 12, MAT.GRASS);
+  const stepper = run(SG.createWalker(w, 22.5, 10.5), 2, { vx: 3 });
+  ok(stepper.x > 26 && stepper.y > G + 0.5 && stepper.onGround, 'one terrace is a stride, not a climb');
+
+  // lane z=20: a three-cube wall is a wall
+  for (let y = SEA + 2; y <= SEA + 4; y++) w.set(26, y, 20, MAT.BASALT);
+  for (let y = SEA + 2; y <= SEA + 4; y++) { w.set(26, y, 19, MAT.BASALT); w.set(26, y, 21, MAT.BASALT); }
+  const walled = run(SG.createWalker(w, 22.5, 20.5), 2, { vx: 3 });
+  ok(walled.x < 25.75 && Math.abs(walled.y - G) < 0.05, 'a wall refuses politely');
+
+  // jump: clears one cube, never two
+  const jumper = SG.createWalker(w, 10.5, 44.5);
+  run(jumper, 0.3, {});
+  let peak = 0;
+  for (let t = 0; t < 90; t++) { jumper.step(1 / 60, t < 3 ? { jump: true } : {}); peak = Math.max(peak, jumper.y); }
+  ok(peak > G + 1.05 && peak < G + 2, `a jump clears one cube, never two (peak +${(peak - G).toFixed(2)})`);
+  ok(jumper.onGround && Math.abs(jumper.y - G) < 0.05, 'what goes up comes back down');
+
+  // lane z=30: a pit is a fall, and the floor catches you
+  w.fill(26, SEA - 1, 29, 29, SEA + 1, 31, MAT.AIR);
+  const faller = run(SG.createWalker(w, 22.5, 30.5), 2.5, { vx: 3 });
+  ok(faller.onGround && faller.y < G - 2.5, 'the pit floor catches the fall');
+
+  // lane z=38: the same pit under water — you wade slow and swim up
+  w.fill(26, SEA - 1, 37, 29, SEA + 1, 39, MAT.AIR);
+  w.fill(26, SEA - 1, 37, 29, SEA + 1, 39, MAT.WATER);
+  const swimmer = run(SG.createWalker(w, 22.5, 38.5), 2, { vx: 3 });
+  ok(swimmer.inFluid, 'water is water — the walker knows it is wet');
+  const depth = swimmer.y;
+  run(swimmer, 1.5, { jump: true });
+  ok(swimmer.y > depth + 1, 'holding jump swims you upward');
+
+  // the district has edges
+  const edge = run(SG.createWalker(w, 45.5, 5.5), 3, { vx: 6 });
+  ok(edge.x < 47.8 && edge.x > 46.5, 'the walker stays on the district');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -26,6 +26,15 @@ node serve.js          # → http://localhost:8017
 Open in a browser. Drag to orbit, scroll to zoom, right-drag/two-finger to
 pan, tap a parcel to survey it, claim it with gems (simulated wallet).
 
+**Walk mode** (the ⚇ WALK button): the district on foot, at eye level.
+Mouse to look (pointer lock), WASD to walk, space to jump, shift to
+stride; a single terrace is a step, two is a wall, and water is honest —
+you wade slow and swim up holding space. Click surveys the parcel ahead
+of the crosshair; select your parcel first and you'll spawn standing on
+it. Esc releases the mouse, Esc again (or the button) returns to the
+survey glass. The physics lives in `src/core/walker.js` — pure JS against
+the same cubes that price the deeds, gated by the headless suite.
+
 **Creator mode** (the ⚒ BUILD button, or `B`): pick a cube from the tileset
 and click — or hold and **drag to paint**. Brush sizes 1/2/3 place single
 cubes or sculpting blobs; the **box** tool fills between two clicked
@@ -48,7 +57,7 @@ god-mode, kept honest by a label — and persists with your save.
 ## Test it
 
 ```
-node test/run.js       # 109 headless assertions, no browser needed
+node test/run.js       # 118 headless assertions, no browser needed
 ```
 
 The entire world model is pure JS with zero rendering dependencies, so the
@@ -132,6 +141,8 @@ src/core/   pure JS, no THREE, runs headless in node
                (equinox parcels, blossom/ember fronts, ice shores, glades…)
   tenure.js    the ownership law: canEdit (deed-gated sculpting) + the
                per-deed improvements ledger
+  walker.js    first-person physics: AABB vs the grid, gravity, one-cube
+               auto-step, honest water — the cubes carry your weight
 src/app/    THREE.js layer (r128, vendored)
   render.js    chunk meshes, ocean, sun/sky, landmark labels, drapes, beacons
   main.js      camera rig, DDA picking, deed card, wallet, persistence
@@ -149,7 +160,7 @@ sweeps); edits remesh only their 32×32 chunk, batched once per frame.
 
 ## Next
 
-- First-person walk mode: stand on your parcel at eye level
+- Touch controls for walk mode (virtual stick; it's keyboard-only today)
 - Ship the world as a baked `.sgw` data file (sculpt → export) instead of
   rebuilding genesis + edits at load
 - Copy/paste stamps and mirrored symmetry for faster authoring
