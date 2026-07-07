@@ -104,6 +104,13 @@ sweeps); edits remesh only their 32×32 chunk, batched once per frame.
 
 ## Next
 
+- **Genesis v3 — the four-season rebuild.** The full master brief (the
+  design prompt, agreed before any code changes) lives at
+  [`design/SEASONS_BRIEF.md`](design/SEASONS_BRIEF.md): one island, four
+  watches — the Morningside (spring), the Noonlands (summer), the
+  Evenlands (autumn), the Hush (winter) — with named woods replacing
+  scattered trees, five authored terrain edits, 20 new materials, and
+  headless acceptance criteria A1–A10.
 - Player-scoped building: gate edits to plots whose deed you hold (creator
   mode already carries the machinery — it just skips the ownership check)
 - Ship the world as a baked `.sgw` data file (sculpt → export) instead of
