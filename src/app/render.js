@@ -221,23 +221,26 @@ R.makeGhost = function () {
   fill.renderOrder = 4;
   scene.add(g);
   R.ghost = g;
-  const tint = erase => {
-    const c = erase ? 0xc4685a : 0xd9a441;
+  // denied — the cursor over ground whose deed you don't hold — reads as a
+  // hollow slate outline, distinct from the erase red and the build brass
+  const tint = (erase, denied) => {
+    const c = denied ? 0x8d99a3 : erase ? 0xc4685a : 0xd9a441;
     fill.material.color.setHex(c); edges.material.color.setHex(c);
+    fill.material.opacity = denied ? 0.12 : 0.3;
   };
-  R.ghostTo = (world, x, y, z, erase, size = 1) => {
+  R.ghostTo = (world, x, y, z, erase, size = 1, denied = false) => {
     g.position.set(x + 0.5 - world.sx / 2, y + 0.5, z + 0.5 - world.sz / 2);
     const s = size === 1 ? 1 : size === 2 ? 3 : 5; // brush blob diameter
     g.scale.set(s, s, s);
-    tint(erase);
+    tint(erase, denied);
     g.visible = true;
   };
   // stretched between two corners for the box tool
-  R.ghostBoxTo = (world, a, b, erase) => {
+  R.ghostBoxTo = (world, a, b, erase, denied = false) => {
     g.position.set((a.x + b.x) / 2 + 0.5 - world.sx / 2, (a.y + b.y) / 2 + 0.5,
       (a.z + b.z) / 2 + 0.5 - world.sz / 2);
     g.scale.set(Math.abs(b.x - a.x) + 1.04, Math.abs(b.y - a.y) + 1.04, Math.abs(b.z - a.z) + 1.04);
-    tint(erase);
+    tint(erase, denied);
     g.visible = true;
   };
 };
@@ -254,6 +257,23 @@ R.drapeTo = function (mesh, world, plot, color) {
   pos.needsUpdate = true;
   mesh.material.color.setHex(color);
   mesh.visible = true;
+};
+
+/* ---- tenure glow: while building, the parcels you hold read green ---- */
+const tenureDrapes = [];
+R.showTenure = function (world, plots, idxs) {
+  R.clearTenure();
+  for (const idx of idxs) {
+    const p = plots[idx];
+    if (!p) continue;
+    const m = makeDrape(0.14);
+    R.drapeTo(m, world, p, 0x8fae63);
+    tenureDrapes.push(m);
+  }
+};
+R.clearTenure = function () {
+  for (const m of tenureDrapes) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); }
+  tenureDrapes.length = 0;
 };
 
 R.addBeacon = function (world, plot) {

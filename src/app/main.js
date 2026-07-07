@@ -12,15 +12,31 @@ const beacons = new Map();
 const SAVE_KEY = 'socialgen-district01-v3';
 const EDITS_KEY = 'socialgen-district01-edits-v3';
 
-/* ---------- creator mode: sculpt the district cube by cube ---------- */
+/* ---------- creator mode: sculpt the district cube by cube ----------
+   The tenure law (src/core/tenure.js): you may shape only the parcels
+   whose deed you hold. The steward toggle lifts the law for district
+   authoring — it is the old god-mode, kept honest by a label. */
 let buildMode = false, selectedMat = -1; // set to GRASS once palette loads
 let brushSize = 1;                       // 1 = single cube, 2/3 = blob brushes
 let tool = 'brush';                      // 'brush' | 'box'
 let boxCorner = null;                    // first corner of a pending box fill
+let steward = false;                     // deed checks off — authoring mode
 const ERASER = -1;
 const edits = new Map();   // "x,y,z" -> id placed (diff vs genesis, replayed on load)
 const undoStack = [];      // batches: one entry per click / stroke / box fill
 let currentBatch = null;
+
+let denyT = 0;
+function denyEdit(why) {
+  if (Date.now() - denyT < 1400) return; // drag-paint must not spam the toast
+  denyT = Date.now();
+  toast(why === 'commons' ? 'The commons are held in trust — not yours to shape'
+    : why === 'bedrock' ? 'Bedrock is forever'
+    : why === 'open water' ? 'The open water has no landlord'
+    : 'No deed held here — claim the parcel to shape it');
+}
+// where may the cursor act? (undo and boot replay pass silent and skip this)
+const mayEdit = (x, y, z) => steward ? { ok: y !== 0 } : SG.canEdit(survey, claims, x, y, z);
 
 function beginBatch() { currentBatch = []; }
 function endBatch() {
@@ -33,6 +49,10 @@ function endBatch() {
 function applyEdit(x, y, z, id, opts = {}) {
   if (!world || !world.inBounds(x, y, z)) return false;
   if (y === 0) return false; // bedrock is forever
+  if (!opts.silent) { // undo restores prior state; the law applied when it was made
+    const t = mayEdit(x, y, z);
+    if (!t.ok) { denyEdit(t.why); return false; }
+  }
   const prev = world.get(x, y, z);
   if (prev === id || prev === SG.MAT.BEDROCK) return false;
   world.set(x, y, z, id);
@@ -191,8 +211,9 @@ function updateHover() {
     R.hoverMesh.visible = false;
     const t = buildTarget(px, py);
     if (!t || !world.inBounds(t.x, t.y, t.z) || t.y <= 0) { R.ghost.visible = false; return; }
-    if (tool === 'box' && boxCorner) R.ghostBoxTo(world, boxCorner, t, selectedMat === ERASER);
-    else R.ghostTo(world, t.x, t.y, t.z, t.erase, tool === 'box' ? 1 : brushSize);
+    const denied = !mayEdit(t.x, t.y, t.z).ok;
+    if (tool === 'box' && boxCorner) R.ghostBoxTo(world, boxCorner, t, selectedMat === ERASER, denied);
+    else R.ghostTo(world, t.x, t.y, t.z, t.erase, tool === 'box' ? 1 : brushSize, denied);
     return;
   }
   R.ghost.visible = false;
@@ -230,7 +251,11 @@ function buildClick(px, py, button) {
   if (!t || t.y <= 0) return;
   const mat = t.erase ? SG.MAT.AIR : selectedMat;
   if (tool === 'box') {
-    if (!boxCorner) { boxCorner = { x: t.x, y: t.y, z: t.z }; toast('Box corner set — click the far corner'); return; }
+    if (!boxCorner) {
+      const may = mayEdit(t.x, t.y, t.z);
+      if (!may.ok) { denyEdit(may.why); return; }
+      boxCorner = { x: t.x, y: t.y, z: t.z }; toast('Box corner set — click the far corner'); return;
+    }
     const a = boxCorner, b = t;
     boxCorner = null;
     const vol = (Math.abs(b.x - a.x) + 1) * (Math.abs(b.y - a.y) + 1) * (Math.abs(b.z - a.z) + 1);
@@ -313,6 +338,8 @@ function showCard(idx) {
     for (const [kind, n] of Object.entries(p.minerals))
       add(kind.charAt(0).toUpperCase() + kind.slice(1) + ' ×' + n + (p.iceLocked ? ' · under ice' : ''), 'b');
     if (claims.has(idx)) {
+      const shaped = SG.improvements(edits, p);
+      if (shaped) add('Shaped ×' + shaped, 'b');
       price.innerHTML = 'Deed held';
       action.innerHTML = '<span id="ownedTag">SETTLED</span>';
     } else {
@@ -393,21 +420,26 @@ function buildTileset() {
 }
 
 const HINT_SURVEY = 'drag&nbsp;·&nbsp;orbit&emsp;scroll&nbsp;·&nbsp;zoom&emsp;right-drag / two-finger&nbsp;·&nbsp;pan<br>tap a parcel to survey it&nbsp;·&nbsp;the named places are held in trust';
-const HINT_BUILD = 'drag&nbsp;·&nbsp;paint&emsp;alt-drag&nbsp;·&nbsp;orbit&emsp;right-click&nbsp;·&nbsp;erase&emsp;alt-click&nbsp;·&nbsp;sample&emsp;ctrl+Z&nbsp;·&nbsp;undo<br>B&nbsp;·&nbsp;exit creator mode&emsp;edits re-survey the district live';
+const HINT_BUILD = 'drag&nbsp;·&nbsp;paint&emsp;alt-drag&nbsp;·&nbsp;orbit&emsp;right-click&nbsp;·&nbsp;erase&emsp;alt-click&nbsp;·&nbsp;sample&emsp;ctrl+Z&nbsp;·&nbsp;undo<br>you shape only the parcels you hold (green)&nbsp;·&nbsp;✪ steward lifts the law&nbsp;·&nbsp;edits re-survey live';
+const HINT_STEWARD = 'drag&nbsp;·&nbsp;paint&emsp;alt-drag&nbsp;·&nbsp;orbit&emsp;right-click&nbsp;·&nbsp;erase&emsp;alt-click&nbsp;·&nbsp;sample&emsp;ctrl+Z&nbsp;·&nbsp;undo<br>✪ steward&nbsp;·&nbsp;the whole district is yours to sculpt&emsp;edits re-survey live';
 
 function setBuildMode(on) {
   buildMode = on;
   boxCorner = null;
   $('buildBtn').classList.toggle('active', on);
   $('tileset').classList.toggle('hidden', !on);
-  $('hints').innerHTML = on ? HINT_BUILD : HINT_SURVEY;
+  $('hints').innerHTML = on ? (steward ? HINT_STEWARD : HINT_BUILD) : HINT_SURVEY;
   if (on) {
     $('card').classList.add('hidden');
     R.hoverMesh.visible = false;
     R.selectMesh.visible = false;
-    toast('Creator mode — the district is yours to sculpt');
+    R.showTenure(world, plots, claims);
+    toast(steward ? 'Creator mode — steward: the district is yours to sculpt'
+      : claims.size ? 'Creator mode — shape the parcels you hold'
+      : 'Creator mode — claim a parcel first, or turn on ✪ steward');
   } else {
     R.ghost.visible = false;
+    R.clearTenure();
     if (selectedIdx >= 0) { // resurface the deed, repriced if the land changed
       R.drapeTo(R.selectMesh, world, plots[selectedIdx],
         claims.has(selectedIdx) ? 0x8fae63 : plots[selectedIdx].buildable ? 0xd9a441 : 0xc4685a);
@@ -415,13 +447,21 @@ function setBuildMode(on) {
     }
   }
 }
+function setSteward(on) {
+  steward = on;
+  $('stewardBtn').classList.toggle('on', on);
+  if (buildMode) $('hints').innerHTML = on ? HINT_STEWARD : HINT_BUILD;
+  toast(on ? 'Steward of the district — the tenure law is lifted'
+    : 'Tenure law restored — you shape only the parcels you hold');
+  persist();
+}
 
 /* ---------- persistence ---------- */
 function loadSave() {
   try { return JSON.parse(localStorage.getItem(SAVE_KEY)); } catch { return null; }
 }
 function persist() {
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ wallet, claims: [...claims] })); } catch {}
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ wallet, claims: [...claims], steward })); } catch {}
 }
 
 /* ---------- boot ---------- */
@@ -452,10 +492,12 @@ function boot() {
       wallet = typeof save.wallet === 'number' ? save.wallet : 2500;
       claims = new Set(save.claims || []);
       claims.forEach(idx => { if (plots[idx]) beacons.set(idx, R.addBeacon(world, plots[idx])); });
+      steward = !!save.steward; // restored silently — no toast at boot
+      $('stewardBtn').classList.toggle('on', steward);
     }
     updateHUD();
     R.updateSun($('sunSlider').value / 100);
-    SG.app = { world, landmarks, geo, survey, plots, claims, applyEdit, setBuildMode }; // for tooling & tests
+    SG.app = { world, landmarks, geo, survey, plots, claims, applyEdit, setBuildMode, setSteward, claim }; // for tooling & tests
     console.log('district raised in', Math.round(performance.now() - t0), 'ms');
     requestAnimationFrame(() => requestAnimationFrame(() => $('loader').classList.add('off')));
   }, 80);
@@ -476,6 +518,7 @@ function boot() {
     toast('Simulated purchase — $9.99 pack → 1,000 ◆');
   });
   $('buildBtn').addEventListener('click', () => setBuildMode(!buildMode));
+  $('stewardBtn').addEventListener('click', () => setSteward(!steward));
   $('undoBtn').addEventListener('click', undoEdit);
   $('revertBtn').addEventListener('click', () => {
     if (!edits.size) { toast('No edits to revert'); return; }

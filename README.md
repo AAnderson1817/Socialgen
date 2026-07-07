@@ -37,10 +37,18 @@ re-surveys the district live** — dig a channel from the sea to an inland
 plot and its deed reprices as Waterfront; bury ore in a column and the deed
 gains mineral rights. The land market reads the cubes, always.
 
+**The tenure law** (`src/core/tenure.js`): the deed is the edit
+permission. You may shape only the parcels you hold — they glow green in
+build mode, the cursor turns hollow slate over everyone else's ground, the
+commons refuse everyone, and bedrock is forever. Your deed card keeps an
+improvements ledger ("Shaped ×N") derived from the edit diff. The
+**✪ steward** toggle lifts the law for district authoring — it is the old
+god-mode, kept honest by a label — and persists with your save.
+
 ## Test it
 
 ```
-node test/run.js       # 100 headless assertions, no browser needed
+node test/run.js       # 109 headless assertions, no browser needed
 ```
 
 The entire world model is pure JS with zero rendering dependencies, so the
@@ -122,6 +130,8 @@ src/core/   pure JS, no THREE, runs headless in node
   genesis.js   the authored composition: terrain, regions, water, ice, seams
   survey.js    plots = 12×12 columns; traits/score/tier/price from the cubes
                (equinox parcels, blossom/ember fronts, ice shores, glades…)
+  tenure.js    the ownership law: canEdit (deed-gated sculpting) + the
+               per-deed improvements ledger
 src/app/    THREE.js layer (r128, vendored)
   render.js    chunk meshes, ocean, sun/sky, landmark labels, drapes, beacons
   main.js      camera rig, DDA picking, deed card, wallet, persistence
@@ -139,8 +149,7 @@ sweeps); edits remesh only their 32×32 chunk, batched once per frame.
 
 ## Next
 
-- Player-scoped building: gate edits to plots whose deed you hold (creator
-  mode already carries the machinery — it just skips the ownership check)
+- First-person walk mode: stand on your parcel at eye level
 - Ship the world as a baked `.sgw` data file (sculpt → export) instead of
   rebuilding genesis + edits at load
 - Copy/paste stamps and mirrored symmetry for faster authoring

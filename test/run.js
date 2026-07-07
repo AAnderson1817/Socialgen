@@ -8,6 +8,7 @@ import '../src/core/gazetteer.js';
 import '../src/core/genesis.js';
 import '../src/core/flora.js';
 import '../src/core/survey.js';
+import '../src/core/tenure.js';
 
 const SG = globalThis.SG;
 const { MAT, PALETTE, World, SEA, REGION } = SG;
@@ -618,6 +619,41 @@ section('editing');
   ok(s2.plots[2 * s2.grid + 2].riverside === true,
     'dug water above sea level flips the plot to riverside');
   ok(s2.plots[0].score > s1.plots[0].score, 'the deed repriced upward');
+}
+
+/* ---------------- tenure: the deed is the edit permission ---------------- */
+section('tenure');
+{
+  const claims = new Set();
+  const bld = survey.plots.filter(p => p && p.buildable);
+  const mine = bld.find(p => p.cx > 2 && p.cx < 28 && p.cz > 2 && p.cz < 28);
+  const mx = mine.x0 + 6, mz = mine.z0 + 6;
+  ok(!SG.canEdit(survey, claims, mx, 30, mz).ok, 'no deed, no edits');
+  claims.add(mine.cz * survey.grid + mine.cx);
+  ok(SG.canEdit(survey, claims, mx, 30, mz).ok, 'the deed unlocks its own columns');
+  ok(SG.canEdit(survey, claims, mine.x0, 30, mine.z0).ok &&
+     SG.canEdit(survey, claims, mine.x0 + SG.PLOT - 1, 30, mine.z0 + SG.PLOT - 1).ok,
+    'the deed runs corner to corner');
+  ok(!SG.canEdit(survey, claims, mx, 0, mz).ok &&
+     SG.canEdit(survey, claims, mx, 0, mz).why === 'bedrock',
+    'bedrock is forever, even on your own deed');
+  const east = SG.canEdit(survey, claims, mine.x0 + SG.PLOT, 30, mz);
+  ok(!east.ok && east.idx === mine.cz * survey.grid + mine.cx + 1,
+    "one cube past the east line is the neighbour's ground");
+  const commons = survey.plots.find(p => p && p.commons);
+  const held = SG.canEdit(survey, new Set(survey.plots.map((_, i) => i)), commons.x0 + 6, 30, commons.z0 + 6);
+  ok(held.ok, 'a held commons idx would edit — the app never claims one');
+  const noDeed = SG.canEdit(survey, claims, commons.x0 + 6, 30, commons.z0 + 6);
+  ok(!noDeed.ok && noDeed.why === 'commons', 'the commons name their refusal');
+  ok(SG.canEdit(survey, claims, -5, 30, 10).why === 'open water' &&
+     SG.canEdit(survey, claims, 10, 30, 9999).why === 'open water',
+    'off-district cubes have no landlord');
+  // the improvements ledger counts only cubes on the deed
+  const edits = new Map([
+    [`${mx},30,${mz}`, 1], [`${mx + 1},31,${mz + 2}`, 1],       // on the deed
+    [`${mine.x0 + SG.PLOT},30,${mz}`, 1], ['0,30,0', 1],        // off it
+  ]);
+  ok(SG.improvements(edits, mine) === 2, 'the ledger counts only cubes on the deed');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
